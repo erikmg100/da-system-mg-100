@@ -1,15 +1,14 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "speech-assistant-openai-realtime-api-node-main/index.js",
-      "use": "@vercel/node"
+  "functions": {
+    "speech-assistant-openai-realtime-api-node-main/index.js": {
+      "runtime": "nodejs18.x"
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/(.*)",
-      "dest": "speech-assistant-openai-realtime-api-node-main/index.js"
+      "source": "/(.*)",
+      "destination": "/speech-assistant-openai-realtime-api-node-main/index.js"
     }
   ]
 }
