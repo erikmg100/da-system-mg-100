@@ -142,12 +142,11 @@ fastify.get('/api/current-prompt', async (request, reply) => {
 fastify.all('/incoming-call', async (request, reply) => {
     try {
         const host = request.headers.host;
-        const protocol = request.headers['x-forwarded-proto'] || 'https';
         
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                               <Response>
                                   <Connect>
-                                      <Stream url="${protocol}://${host}/media-stream" />
+                                      <Stream url="wss://${host}/media-stream" />
                                   </Connect>
                               </Response>`;
         reply.type('text/xml').send(twimlResponse);
