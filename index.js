@@ -1,8 +1,3 @@
-
-Erik Ovesny <erik@meetgabbi.com>
-3:24 PM (48 minutes ago)
-to Erik
-
 import Fastify from 'fastify';
 import WebSocket from 'ws';
 import dotenv from 'dotenv';
