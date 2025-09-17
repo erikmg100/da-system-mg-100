@@ -51,20 +51,17 @@ fastify.get('/', async (request, reply) => {
 });
 
 fastify.get('/api/current-prompt', async (request, reply) => {
-    console.log('GET /api/current-prompt - Current systemPrompt:', systemPrompt);
     reply.send({ prompt: systemPrompt });
 });
 
 fastify.put('/api/update-prompt', async (request, reply) => {
     const { prompt } = request.body;
-    console.log('PUT /api/update-prompt - Old prompt:', systemPrompt);
     systemPrompt = prompt;
-    console.log('PUT /api/update-prompt - New prompt:', systemPrompt);
+    console.log('Prompt updated to:', prompt);
     reply.send({ success: true, message: 'Prompt updated successfully' });
 });
 
 fastify.all('/incoming-call', async (request, reply) => {
-    console.log('Incoming call received - Current systemPrompt:', systemPrompt);
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                           <Response>
                               <Connect>
@@ -76,9 +73,7 @@ fastify.all('/incoming-call', async (request, reply) => {
 
 fastify.register(async (fastify) => {
     fastify.get('/media-stream', { websocket: true }, (connection, req) => {
-        console.log('Client connected to WebSocket');
-        console.log('WebSocket connection - Current systemPrompt:', systemPrompt);
-        
+        console.log('Client connected');
         let streamSid = null;
         let latestMediaTimestamp = 0;
         let lastAssistantItem = null;
@@ -93,8 +88,6 @@ fastify.register(async (fastify) => {
         });
 
         const initializeSession = () => {
-            console.log('Initializing OpenAI session with prompt:', systemPrompt);
-            
             const sessionUpdate = {
                 type: 'session.update',
                 session: {
@@ -108,7 +101,7 @@ fastify.register(async (fastify) => {
                 }
             };
 
-            console.log('Sending session update to OpenAI:', JSON.stringify(sessionUpdate, null, 2));
+            console.log('Sending session update:', JSON.stringify(sessionUpdate));
             openAiWs.send(JSON.stringify(sessionUpdate));
         };
 
@@ -176,7 +169,6 @@ fastify.register(async (fastify) => {
                     case 'start':
                         streamSid = data.start.streamSid;
                         console.log('Incoming stream has started', streamSid);
-                        console.log('Stream started - Using systemPrompt:', systemPrompt);
                         responseStartTimestampTwilio = null; 
                         latestMediaTimestamp = 0;
                         break;
@@ -210,5 +202,4 @@ fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
         process.exit(1);
     }
     console.log(`Server is listening on port ${PORT}`);
-    console.log('Initial systemPrompt on startup:', systemPrompt);
 });
