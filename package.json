@@ -12,7 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@fastify/cors": "^9.0.0",
+    "@fastify/cors": "^10.0.0",
     "@fastify/formbody": "^8.0.0",
     "@fastify/websocket": "^11.0.0",
     "dotenv": "^16.4.5",
