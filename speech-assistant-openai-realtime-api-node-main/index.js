@@ -22,7 +22,7 @@ fastify.register(fastifyWs);
 
 // Constants
 const SYSTEM_MESSAGE = 'You are a helpful and bubbly AI assistant who loves to chat about anything the user is interested about and is prepared to offer them facts. You have a penchant for dad jokes, owl jokes, and rickrolling – subtly. Always stay positive, but work in a joke when appropriate.';
-const VOICE = 'marin';
+const VOICE = 'alloy';
 const TEMPERATURE = 0.8; // Controls the randomness of the AI's responses
 const PORT = process.env.PORT || 5050; // Allow dynamic port assignment
 
@@ -47,10 +47,14 @@ fastify.get('/', async (request, reply) => {
     reply.send({ message: 'Twilio Media Stream Server is running!' });
 });
 
-// Route for Twilio to handle incoming calls - REMOVED ANNOYING MESSAGES
+// Route for Twilio to handle incoming calls
+// <Say> punctuation to improve text-to-speech translation
 fastify.all('/incoming-call', async (request, reply) => {
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                           <Response>
+                              <Say voice="Google.en-US-Chirp3-HD-Aoede">Please wait while we connect your call to the A. I. voice assistant, powered by Twilio and the Open A I Realtime API</Say>
+                              <Pause length="1"/>
+                              <Say voice="Google.en-US-Chirp3-HD-Aoede">O.K. you can start talking!</Say>
                               <Connect>
                                   <Stream url="wss://${request.headers.host}/media-stream" />
                               </Connect>
@@ -71,30 +75,33 @@ fastify.register(async (fastify) => {
         let markQueue = [];
         let responseStartTimestampTwilio = null;
 
-        const openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview`, {
+        const openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime&temperature=${TEMPERATURE}`, {
             headers: {
                 Authorization: `Bearer ${OPENAI_API_KEY}`,
-                "OpenAI-Beta": "realtime=v1"
             }
         });
 
-        // Control initial session with OpenAI - USING PROPER FORMAT FROM TWILIO TUTORIAL
+        // Control initial session with OpenAI
         const initializeSession = () => {
             const sessionUpdate = {
                 type: 'session.update',
                 session: {
-                    turn_detection: { type: 'server_vad' },
-                    input_audio_format: 'g711_ulaw',
-                    output_audio_format: 'g711_ulaw',
-                    voice: VOICE,
+                    type: 'realtime',
+                    model: "gpt-realtime",
+                    output_modalities: ["audio"],
+                    audio: {
+                        input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
+                        output: { format: { type: 'audio/pcmu' }, voice: VOICE },
+                    },
                     instructions: SYSTEM_MESSAGE,
-                    modalities: ['text', 'audio'],
-                    temperature: TEMPERATURE,
-                }
+                },
             };
 
             console.log('Sending session update:', JSON.stringify(sessionUpdate));
             openAiWs.send(JSON.stringify(sessionUpdate));
+
+            // Uncomment the following line to have AI speak first:
+            // sendInitialConversationItem();
         };
 
         // Send initial conversation item if AI talks first
@@ -175,7 +182,7 @@ fastify.register(async (fastify) => {
                     console.log(`Received event: ${response.type}`, response);
                 }
 
-                if (response.type === 'response.audio.delta' && response.delta) {
+                if (response.type === 'response.output_audio.delta' && response.delta) {
                     const audioDelta = {
                         event: 'media',
                         streamSid: streamSid,
@@ -260,8 +267,7 @@ fastify.register(async (fastify) => {
     });
 });
 
-// FIXED: Added host: '0.0.0.0' for Railway compatibility
-fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
+fastify.listen({ port: PORT }, (err) => {
     if (err) {
         console.error(err);
         process.exit(1);
