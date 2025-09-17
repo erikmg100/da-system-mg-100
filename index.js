@@ -55,6 +55,9 @@ const VOICE = process.env.VOICE || 'marin';
 const TEMPERATURE = parseFloat(process.env.TEMPERATURE) || 0.8;
 const PORT = process.env.PORT || 3000;
 
+// 🚀 NEW: Track active connections for instant updates
+let activeConnections = new Set();
+
 // List of Event Types to log to the console
 const LOG_EVENT_TYPES = [
     'error',
@@ -88,7 +91,7 @@ fastify.get('/health', async (request, reply) => {
     });
 });
 
-// API endpoint to update system message
+// 🚀 ENHANCED: API endpoint to update system message with instant session updates
 fastify.route({
     method: ['POST', 'PUT'],
     url: '/api/update-prompt',
@@ -101,13 +104,49 @@ fastify.route({
                 });
             }
             
+            const oldPrompt = SYSTEM_MESSAGE;
             SYSTEM_MESSAGE = prompt;
-            console.log('System message updated:', prompt);
+            
+            console.log('=== PROMPT UPDATE FROM LOVABLE ===');
+            console.log('Previous prompt:', oldPrompt.substring(0, 100) + '...');
+            console.log('NEW prompt:', SYSTEM_MESSAGE.substring(0, 100) + '...');
+            console.log('Active connections:', activeConnections.size);
+            
+            // 🚀 UPDATE ALL ACTIVE SESSIONS IMMEDIATELY
+            let updatedSessions = 0;
+            activeConnections.forEach(connectionData => {
+                if (connectionData.openAiWs && connectionData.openAiWs.readyState === WebSocket.OPEN) {
+                    console.log('🔄 Updating active session with new prompt...');
+                    const sessionUpdate = {
+                        type: 'session.update',
+                        session: {
+                            instructions: SYSTEM_MESSAGE,
+                            voice: VOICE,
+                            temperature: TEMPERATURE,
+                            type: 'realtime',
+                            model: "gpt-realtime",
+                            output_modalities: ["audio"],
+                            audio: {
+                                input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
+                                output: { format: { type: 'audio/pcmu' }, voice: VOICE },
+                            }
+                        }
+                    };
+                    connectionData.openAiWs.send(JSON.stringify(sessionUpdate));
+                    updatedSessions++;
+                    console.log('✅ Active session updated instantly!');
+                }
+            });
+            
+            console.log(`Updated ${updatedSessions} active sessions immediately`);
+            console.log('Next call will use the NEW prompt');
+            console.log('==================================');
             
             reply.send({ 
                 success: true, 
                 message: 'System prompt updated successfully',
-                prompt: SYSTEM_MESSAGE 
+                prompt: SYSTEM_MESSAGE,
+                activeSessionsUpdated: updatedSessions
             });
         } catch (error) {
             console.error('Error updating prompt:', error);
@@ -123,13 +162,19 @@ fastify.get('/api/current-prompt', async (request, reply) => {
     reply.send({ 
         prompt: SYSTEM_MESSAGE,
         voice: VOICE,
-        temperature: TEMPERATURE
+        temperature: TEMPERATURE,
+        activeConnections: activeConnections.size
     });
 });
 
 // Route for Twilio to handle incoming calls - NO INTRO MESSAGE
 fastify.all('/incoming-call', async (request, reply) => {
     try {
+        console.log('=== INCOMING CALL ===');
+        console.log('Current SYSTEM_MESSAGE at call time:', SYSTEM_MESSAGE.substring(0, 100) + '...');
+        console.log('Voice:', VOICE);
+        console.log('====================');
+        
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                               <Response>
                                   <Connect>
@@ -156,6 +201,9 @@ fastify.register(async (fastify) => {
         let responseStartTimestampTwilio = null;
         let openAiWs = null;
 
+        // 🚀 NEW: Create connection data object to track this connection
+        const connectionData = { connection, openAiWs: null };
+
         try {
             openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime&temperature=${TEMPERATURE}`, {
                 headers: {
@@ -163,6 +211,11 @@ fastify.register(async (fastify) => {
                 },
                 timeout: 30000
             });
+            
+            // 🚀 NEW: Store the OpenAI WebSocket in connection data and add to active connections
+            connectionData.openAiWs = openAiWs;
+            activeConnections.add(connectionData);
+            
         } catch (error) {
             console.error('Failed to create OpenAI WebSocket:', error);
             connection.close();
@@ -171,6 +224,11 @@ fastify.register(async (fastify) => {
 
         // Control initial session with OpenAI
         const initializeSession = () => {
+            console.log('=== INITIALIZING SESSION ===');
+            console.log('Using SYSTEM_MESSAGE:', SYSTEM_MESSAGE.substring(0, 100) + '...');
+            console.log('Using VOICE:', VOICE);
+            console.log('============================');
+            
             const sessionUpdate = {
                 type: 'session.update',
                 session: {
@@ -354,6 +412,8 @@ fastify.register(async (fastify) => {
         // Handle connection close
         connection.on('close', () => {
             console.log('Client disconnected from media stream');
+            // 🚀 NEW: Remove from active connections
+            activeConnections.delete(connectionData);
             if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
                 openAiWs.close();
             }
@@ -367,6 +427,8 @@ fastify.register(async (fastify) => {
         // Handle OpenAI WebSocket close and errors
         openAiWs.on('close', (code, reason) => {
             console.log(`Disconnected from OpenAI Realtime API. Code: ${code}, Reason: ${reason}`);
+            // 🚀 NEW: Remove from active connections when OpenAI connection closes
+            activeConnections.delete(connectionData);
         });
 
         openAiWs.on('error', (error) => {
