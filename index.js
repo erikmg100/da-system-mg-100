@@ -185,4 +185,79 @@ fastify.register(async (fastify) => {
                     // First delta from a new response starts the elapsed time counter
                     if (!responseStartTimestampTwilio) {
                         responseStartTimestampTwilio = latestMediaTimestamp;
-                        if (
+                        if (SHOW_TIMING_MATH) console.log(`Setting start timestamp for new response: ${responseStartTimestampTwilio}ms`);
+                    }
+                    if (response.item_id) {
+                        lastAssistantItem = response.item_id;
+                    }
+                    sendMark(connection, streamSid);
+                }
+                if (response.type === 'input_audio_buffer.speech_started') {
+                    handleSpeechStartedEvent();
+                }
+            } catch (error) {
+                console.error('Error processing OpenAI message:', error, 'Raw message:', data);
+            }
+        });
+
+        // Handle incoming messages from Twilio
+        connection.on('message', (message) => {
+            try {
+                const data = JSON.parse(message);
+                switch (data.event) {
+                    case 'media':
+                        latestMediaTimestamp = data.media.timestamp;
+                        if (SHOW_TIMING_MATH) console.log(`Received media message with timestamp: ${latestMediaTimestamp}ms`);
+                        if (openAiWs.readyState === WebSocket.OPEN) {
+                            const audioAppend = {
+                                type: 'input_audio_buffer.append',
+                                audio: data.media.payload
+                            };
+                            openAiWs.send(JSON.stringify(audioAppend));
+                        }
+                        break;
+                    case 'start':
+                        streamSid = data.start.streamSid;
+                        console.log('Incoming stream has started', streamSid);
+                        // Reset start and media timestamp on a new stream
+                        responseStartTimestampTwilio = null;
+                        latestMediaTimestamp = 0;
+                        break;
+                    case 'mark':
+                        if (markQueue.length > 0) {
+                            markQueue.shift();
+                        }
+                        break;
+                    default:
+                        console.log('Received non-media event:', data.event);
+                        break;
+                }
+            } catch (error) {
+                console.error('Error parsing message:', error, 'Message:', message);
+            }
+        });
+
+        // Handle connection close
+        connection.on('close', () => {
+            if (openAiWs.readyState === WebSocket.OPEN) openAiWs.close();
+            console.log('Client disconnected.');
+        });
+
+        // Handle WebSocket close and errors
+        openAiWs.on('close', () => {
+            console.log('Disconnected from the OpenAI Realtime API');
+        });
+
+        openAiWs.on('error', (error) => {
+            console.error('Error in the OpenAI WebSocket:', error);
+        });
+    });
+});
+
+fastify.listen({ port: PORT, host: '::' }, (err) => { // Updated to use dynamic port with IPv6
+    if (err) {
+        console.error(err);
+        process.exit(1);
+    }
+    console.log(`Server is listening on port ${PORT}`);
+});
