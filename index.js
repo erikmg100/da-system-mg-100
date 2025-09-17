@@ -32,9 +32,10 @@ fastify.register(fastifyCors, {
         // Allow requests with no origin (like mobile apps or Postman)
         if (!origin) return callback(null, true);
         
-        // Allow all Lovable domains
+        // Allow all Lovable domains (including lovableproject.com)
         if (origin.includes('lovable.dev') || 
             origin.includes('lovable.app') ||
+            origin.includes('lovableproject.com') ||
             origin.includes('localhost')) {
             return callback(null, true);
         }
@@ -99,28 +100,32 @@ fastify.get('/health', async (request, reply) => {
 });
 
 // API endpoint to update system message
-fastify.post('/api/update-prompt', async (request, reply) => {
-    try {
-        const { prompt } = request.body;
-        if (!prompt || typeof prompt !== 'string') {
-            return reply.status(400).send({ 
-                error: 'Invalid prompt. Must be a non-empty string.' 
+fastify.route({
+    method: ['POST', 'PUT'],
+    url: '/api/update-prompt',
+    handler: async (request, reply) => {
+        try {
+            const { prompt } = request.body;
+            if (!prompt || typeof prompt !== 'string') {
+                return reply.status(400).send({ 
+                    error: 'Invalid prompt. Must be a non-empty string.' 
+                });
+            }
+            
+            SYSTEM_MESSAGE = prompt;
+            fastify.log.info('System message updated:', prompt);
+            
+            reply.send({ 
+                success: true, 
+                message: 'System prompt updated successfully',
+                prompt: SYSTEM_MESSAGE 
+            });
+        } catch (error) {
+            fastify.log.error('Error updating prompt:', error);
+            reply.status(500).send({ 
+                error: 'Failed to update prompt' 
             });
         }
-        
-        SYSTEM_MESSAGE = prompt;
-        fastify.log.info('System message updated:', prompt);
-        
-        reply.send({ 
-            success: true, 
-            message: 'System prompt updated successfully',
-            prompt: SYSTEM_MESSAGE 
-        });
-    } catch (error) {
-        fastify.log.error('Error updating prompt:', error);
-        reply.status(500).send({ 
-            error: 'Failed to update prompt' 
-        });
     }
 });
 
