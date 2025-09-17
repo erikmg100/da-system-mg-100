@@ -127,14 +127,11 @@ fastify.get('/api/current-prompt', async (request, reply) => {
     });
 });
 
-// Route for Twilio to handle incoming calls
+// Route for Twilio to handle incoming calls - NO INTRO MESSAGE
 fastify.all('/incoming-call', async (request, reply) => {
     try {
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                               <Response>
-                                  <Say voice="Google.en-US-Chirp3-HD-Aoede">Please wait while we connect your call to the A. I. voice assistant, powered by Twilio and the Open A I Realtime API</Say>
-                                  <Pause length="1"/>
-                                  <Say voice="Google.en-US-Chirp3-HD-Aoede">O.K. you can start talking!</Say>
                                   <Connect>
                                       <Stream url="wss://${request.headers.host}/media-stream" />
                                   </Connect>
@@ -274,7 +271,17 @@ fastify.register(async (fastify) => {
                     console.log(`Received event: ${response.type}`, response);
                 }
 
-                // CRITICAL FIX: Listen for the correct audio event type
+                // CRITICAL: Log full error details when responses fail
+                if (response.type === 'response.done' && response.response.status === 'failed') {
+                    console.log('=== RESPONSE FAILURE DETAILS ===');
+                    console.log('Full response object:', JSON.stringify(response.response, null, 2));
+                    if (response.response.status_details && response.response.status_details.error) {
+                        console.log('Error details:', JSON.stringify(response.response.status_details.error, null, 2));
+                    }
+                    console.log('================================');
+                }
+
+                // Listen for the correct audio event type
                 if (response.type === 'response.output_audio.delta' && response.delta) {
                     console.log('Audio delta received! Length:', response.delta.length);
                     if (connection.readyState === WebSocket.OPEN) {
