@@ -170,9 +170,10 @@ fastify.register(async (fastify) => {
         let openAiWs = null;
 
         try {
-            openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime&temperature=${TEMPERATURE}`, {
+            openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
                 headers: {
-                    Authorization: `Bearer ${OPENAI_API_KEY}`,
+                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                    'OpenAI-Beta': 'realtime=v1'
                 },
                 timeout: 30000
             });
@@ -187,20 +188,21 @@ fastify.register(async (fastify) => {
             const sessionUpdate = {
                 type: 'session.update',
                 session: {
-                    modalities: ["text", "audio"],
+                    modalities: ['text', 'audio'],
                     instructions: SYSTEM_MESSAGE,
                     voice: VOICE,
-                    input_audio_format: "g711_ulaw",
-                    output_audio_format: "g711_ulaw",
+                    input_audio_format: 'pcm16',
+                    output_audio_format: 'pcm16',
                     input_audio_transcription: {
-                        model: "whisper-1"
+                        model: 'whisper-1'
                     },
                     turn_detection: {
-                        type: "server_vad",
+                        type: 'server_vad',
                         threshold: 0.5,
                         prefix_padding_ms: 300,
-                        silence_duration_ms: 500
-                    }
+                        silence_duration_ms: 200
+                    },
+                    temperature: TEMPERATURE
                 }
             };
             console.log('Sending session update');
@@ -286,12 +288,18 @@ fastify.register(async (fastify) => {
             try {
                 const response = JSON.parse(data);
                 
+                // Log ALL events for debugging
+                console.log(`Received event: ${response.type}`, response.type === 'error' ? response : '');
+                
                 if (LOG_EVENT_TYPES.includes(response.type)) {
-                    console.log(`Received event: ${response.type}`);
+                    console.log(`Logged event: ${response.type}`);
                 }
                 
+                // Handle audio output - check for response.audio.delta events
                 if (response.type === 'response.audio.delta' && response.delta) {
+                    console.log('Audio delta received! Length:', response.delta.length);
                     if (connection.readyState === WebSocket.OPEN) {
+                        // Convert PCM16 to base64 for Twilio
                         const audioDelta = {
                             event: 'media',
                             streamSid: streamSid,
