@@ -32,22 +32,11 @@ fastify.register(fastifyCors, {
         // Allow requests with no origin (like mobile apps or Postman)
         if (!origin) return callback(null, true);
         
-        // Allow all Lovable domains (including lovableproject.com)
+        // Allow all Lovable domains
         if (origin.includes('lovable.dev') || 
             origin.includes('lovable.app') ||
             origin.includes('lovableproject.com') ||
             origin.includes('localhost')) {
-            return callback(null, true);
-        }
-        
-        // Allow your specific domains
-        const allowedOrigins = [
-            'https://lovable.dev',
-            'http://localhost:3000',
-            'http://localhost:5173'
-        ];
-        
-        if (allowedOrigins.includes(origin)) {
             return callback(null, true);
         }
         
@@ -64,7 +53,7 @@ fastify.register(fastifyCors, {
 let SYSTEM_MESSAGE = process.env.SYSTEM_MESSAGE || 'You are a helpful and bubbly AI assistant who loves to chat about anything the user is interested about and is prepared to offer them facts. You have a penchant for dad jokes, owl jokes, and rickrolling – subtly. Always stay positive, but work in a joke when appropriate.';
 const VOICE = process.env.VOICE || 'alloy';
 const TEMPERATURE = parseFloat(process.env.TEMPERATURE) || 0.8;
-const PORT = process.env.PORT || 3000; // Add fallback port
+const PORT = process.env.PORT || 3000;
 
 // List of Event Types to log to the console
 const LOG_EVENT_TYPES = [
@@ -113,7 +102,7 @@ fastify.route({
             }
             
             SYSTEM_MESSAGE = prompt;
-            fastify.log.info('System message updated:', prompt);
+            console.log('System message updated:', prompt);
             
             reply.send({ 
                 success: true, 
@@ -121,7 +110,7 @@ fastify.route({
                 prompt: SYSTEM_MESSAGE 
             });
         } catch (error) {
-            fastify.log.error('Error updating prompt:', error);
+            console.error('Error updating prompt:', error);
             reply.status(500).send({ 
                 error: 'Failed to update prompt' 
             });
@@ -141,17 +130,18 @@ fastify.get('/api/current-prompt', async (request, reply) => {
 // Route for Twilio to handle incoming calls
 fastify.all('/incoming-call', async (request, reply) => {
     try {
-        const host = request.headers.host;
-        
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                               <Response>
+                                  <Say voice="Google.en-US-Chirp3-HD-Aoede">Please wait while we connect your call to the A. I. voice assistant, powered by Twilio and the Open A I Realtime API</Say>
+                                  <Pause length="1"/>
+                                  <Say voice="Google.en-US-Chirp3-HD-Aoede">O.K. you can start talking!</Say>
                                   <Connect>
-                                      <Stream url="wss://${host}/media-stream" />
+                                      <Stream url="wss://${request.headers.host}/media-stream" />
                                   </Connect>
                               </Response>`;
         reply.type('text/xml').send(twimlResponse);
     } catch (error) {
-        fastify.log.error('Error handling incoming call:', error);
+        console.error('Error handling incoming call:', error);
         reply.status(500).send('Internal Server Error');
     }
 });
@@ -170,10 +160,9 @@ fastify.register(async (fastify) => {
         let openAiWs = null;
 
         try {
-            openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
+            openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime&temperature=${TEMPERATURE}`, {
                 headers: {
                     'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                    'OpenAI-Beta': 'realtime=v1'
                 },
                 timeout: 30000
             });
@@ -188,21 +177,17 @@ fastify.register(async (fastify) => {
             const sessionUpdate = {
                 type: 'session.update',
                 session: {
-                    modalities: ['text', 'audio'],
-                    instructions: SYSTEM_MESSAGE,
-                    voice: VOICE,
-                    input_audio_format: 'g711_ulaw',
-                    output_audio_format: 'g711_ulaw',
-                    turn_detection: {
-                        type: 'server_vad',
-                        threshold: 0.5,
-                        prefix_padding_ms: 300,
-                        silence_duration_ms: 200
+                    type: 'realtime',
+                    model: "gpt-realtime",
+                    output_modalities: ["audio"],
+                    audio: {
+                        input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
+                        output: { format: { type: 'audio/pcmu' }, voice: VOICE },
                     },
-                    temperature: TEMPERATURE
-                }
+                    instructions: SYSTEM_MESSAGE,
+                },
             };
-            console.log('Sending session update');
+            console.log('Sending session update:', JSON.stringify(sessionUpdate));
             if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
                 openAiWs.send(JSON.stringify(sessionUpdate));
             }
@@ -241,7 +226,7 @@ fastify.register(async (fastify) => {
                         content_index: 0,
                         audio_end_ms: elapsedTime
                     };
-                    if (SHOW_TIMING_MATH) console.log('Sending truncation event');
+                    if (SHOW_TIMING_MATH) console.log('Sending truncation event:', JSON.stringify(truncateEvent));
                     openAiWs.send(JSON.stringify(truncateEvent));
                 }
                 
@@ -285,42 +270,40 @@ fastify.register(async (fastify) => {
             try {
                 const response = JSON.parse(data);
                 
-                // Log ALL events for debugging
-                console.log(`Received event: ${response.type}`, response.type === 'error' ? response : '');
-                
                 if (LOG_EVENT_TYPES.includes(response.type)) {
-                    console.log(`Logged event: ${response.type}`);
+                    console.log(`Received event: ${response.type}`, response);
                 }
-                
-                // Handle audio output - check for response.audio.delta events
-                if (response.type === 'response.audio.delta' && response.delta) {
+
+                // CRITICAL FIX: Listen for the correct audio event type
+                if (response.type === 'response.output_audio.delta' && response.delta) {
                     console.log('Audio delta received! Length:', response.delta.length);
                     if (connection.readyState === WebSocket.OPEN) {
-                        // Convert PCM16 to base64 for Twilio
                         const audioDelta = {
                             event: 'media',
                             streamSid: streamSid,
                             media: { payload: response.delta }
                         };
                         connection.send(JSON.stringify(audioDelta));
-                        
+
                         // First delta from a new response starts the elapsed time counter
                         if (!responseStartTimestampTwilio) {
                             responseStartTimestampTwilio = latestMediaTimestamp;
                             if (SHOW_TIMING_MATH) console.log(`Setting start timestamp for new response: ${responseStartTimestampTwilio}ms`);
                         }
+
                         if (response.item_id) {
                             lastAssistantItem = response.item_id;
                         }
+                        
                         sendMark(connection, streamSid);
                     }
                 }
-                
+
                 if (response.type === 'input_audio_buffer.speech_started') {
                     handleSpeechStartedEvent();
                 }
             } catch (error) {
-                console.error('Error processing OpenAI message:', error);
+                console.error('Error processing OpenAI message:', error, 'Raw message:', data);
             }
         });
 
@@ -357,7 +340,7 @@ fastify.register(async (fastify) => {
                         break;
                 }
             } catch (error) {
-                console.error('Error parsing message:', error);
+                console.error('Error parsing message:', error, 'Message:', message);
             }
         });
 
@@ -399,7 +382,7 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Error handler
 fastify.setErrorHandler((error, request, reply) => {
-    fastify.log.error(error);
+    console.error('Server error:', error);
     reply.status(500).send({ error: 'Something went wrong!' });
 });
 
@@ -408,11 +391,11 @@ const start = async () => {
     try {
         await fastify.listen({ 
             port: PORT, 
-            host: '0.0.0.0' // Changed from '::' to '0.0.0.0' for better Railway compatibility
+            host: '0.0.0.0'
         });
         console.log(`Server is listening on port ${PORT}`);
     } catch (err) {
-        fastify.log.error(err);
+        console.error('Failed to start server:', err);
         process.exit(1);
     }
 };
