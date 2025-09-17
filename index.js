@@ -25,16 +25,37 @@ const fastify = Fastify({
 
 fastify.register(fastifyFormBody);
 fastify.register(fastifyWs);
+
+// Fixed CORS configuration for Lovable
 fastify.register(fastifyCors, { 
-    origin: [
-        'https://*.lovable.dev', 
-        'https://lovable.dev',
-        /\.lovable\.dev$/,
-        'http://localhost:3000',
-        'http://localhost:5173'
-    ],
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or Postman)
+        if (!origin) return callback(null, true);
+        
+        // Allow all Lovable domains
+        if (origin.includes('lovable.dev') || 
+            origin.includes('lovable.app') ||
+            origin.includes('localhost')) {
+            return callback(null, true);
+        }
+        
+        // Allow your specific domains
+        const allowedOrigins = [
+            'https://lovable.dev',
+            'http://localhost:3000',
+            'http://localhost:5173'
+        ];
+        
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+        
+        // For debugging - log rejected origins
+        console.log('CORS rejected origin:', origin);
+        return callback(new Error('Not allowed by CORS'), false);
+    },
     methods: ['GET', 'PUT', 'POST', 'OPTIONS', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     credentials: true
 });
 
