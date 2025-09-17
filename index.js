@@ -187,15 +187,21 @@ fastify.register(async (fastify) => {
             const sessionUpdate = {
                 type: 'session.update',
                 session: {
-                    type: 'realtime',
-                    model: "gpt-realtime",
-                    output_modalities: ["audio"],
-                    audio: {
-                        input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
-                        output: { format: { type: 'audio/pcmu' }, voice: VOICE },
-                    },
+                    modalities: ["text", "audio"],
                     instructions: SYSTEM_MESSAGE,
-                },
+                    voice: VOICE,
+                    input_audio_format: "g711_ulaw",
+                    output_audio_format: "g711_ulaw",
+                    input_audio_transcription: {
+                        model: "whisper-1"
+                    },
+                    turn_detection: {
+                        type: "server_vad",
+                        threshold: 0.5,
+                        prefix_padding_ms: 300,
+                        silence_duration_ms: 500
+                    }
+                }
             };
             console.log('Sending session update');
             if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
@@ -284,7 +290,7 @@ fastify.register(async (fastify) => {
                     console.log(`Received event: ${response.type}`);
                 }
                 
-                if (response.type === 'response.output_audio.delta' && response.delta) {
+                if (response.type === 'response.audio.delta' && response.delta) {
                     if (connection.readyState === WebSocket.OPEN) {
                         const audioDelta = {
                             event: 'media',
