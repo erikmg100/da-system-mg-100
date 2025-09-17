@@ -90,15 +90,7 @@ fastify.register(async (fastify) => {
                     model: "gpt-realtime",
                     output_modalities: ["audio"],
                     audio: {
-                        input: { 
-                            format: { type: 'audio/g711_ulaw' }, 
-                            turn_detection: { 
-                                type: "server_vad",
-                                threshold: 0.5,
-                                prefix_padding_ms: 300,
-                                silence_duration_ms: 800
-                            }
-                        },
+                        input: { format: { type: 'audio/g711_ulaw' }, turn_detection: { type: "server_vad" } },
                         output: { format: { type: 'audio/g711_ulaw' }, voice: VOICE },
                     },
                     instructions: SYSTEM_MESSAGE,
