@@ -3,38 +3,35 @@ import WebSocket from 'ws';
 import dotenv from 'dotenv';
 import fastifyFormBody from '@fastify/formbody';
 import fastifyWs from '@fastify/websocket';
-import fastifyCors from '@fastify/cors';
 
-// Load environment variables from .env file
 dotenv.config();
 
-// Retrieve the OpenAI API key from environment variables.
 const { OPENAI_API_KEY } = process.env;
 if (!OPENAI_API_KEY) {
     console.error('Missing OpenAI API key. Please set it in the .env file.');
     process.exit(1);
 }
 
-// Initialize Fastify
 const fastify = Fastify();
 fastify.register(fastifyFormBody);
 fastify.register(fastifyWs);
 
-// Register CORS to allow requests from Lovable
-fastify.register(fastifyCors, {
-    origin: true,
-    methods: ['GET', 'PUT', 'POST', 'DELETE']
+fastify.addHook('preHandler', async (request, reply) => {
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
+    reply.header('Access-Control-Allow-Headers', 'Content-Type');
+    
+    if (request.method === 'OPTIONS') {
+        reply.send();
+    }
 });
 
-// Variable to store the current system prompt
 let systemPrompt = 'You are a helpful and bubbly AI assistant who loves to chat about anything the user is interested about and is prepared to offer them facts. You have a penchant for dad jokes, owl jokes, and rickrolling – subtly. Always stay positive, but work in a joke when appropriate.';
 
-// Constants
 const VOICE = 'marin';
-const TEMPERATURE = 0.8; // Controls the randomness of the AI's responses
-const PORT = process.env.PORT || 5050; // Allow dynamic port assignment
+const TEMPERATURE = 0.8;
+const PORT = process.env.PORT || 5050;
 
-// List of Event Types to log to the console. See the OpenAI Realtime API Documentation: https://platform.openai.com/docs/api-reference/realtime
 const LOG_EVENT_TYPES = [
     'error',
     'response.content.done',
@@ -47,20 +44,16 @@ const LOG_EVENT_TYPES = [
     'session.updated'
 ];
 
-// Show AI response elapsed timing calculations
 const SHOW_TIMING_MATH = false;
 
-// Root Route
 fastify.get('/', async (request, reply) => {
     reply.send({ message: 'Twilio Media Stream Server is running!' });
 });
 
-// API endpoint to get current prompt
 fastify.get('/api/current-prompt', async (request, reply) => {
     reply.send({ prompt: systemPrompt });
 });
 
-// API endpoint to update prompt
 fastify.put('/api/update-prompt', async (request, reply) => {
     const { prompt } = request.body;
     systemPrompt = prompt;
@@ -68,7 +61,6 @@ fastify.put('/api/update-prompt', async (request, reply) => {
     reply.send({ success: true, message: 'Prompt updated successfully' });
 });
 
-// Route for Twilio to handle incoming calls - REMOVED ANNOYING MESSAGES
 fastify.all('/incoming-call', async (request, reply) => {
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                           <Response>
@@ -79,11 +71,9 @@ fastify.all('/incoming-call', async (request, reply) => {
     reply.type('text/xml').send(twimlResponse);
 });
 
-// WebSocket route for media-stream
 fastify.register(async (fastify) => {
     fastify.get('/media-stream', { websocket: true }, (connection, req) => {
         console.log('Client connected');
-        // Connection-specific state
         let streamSid = null;
         let latestMediaTimestamp = 0;
         let lastAssistantItem = null;
@@ -97,7 +87,6 @@ fastify.register(async (fastify) => {
             }
         });
 
-        // Control initial session with OpenAI
         const initializeSession = () => {
             const sessionUpdate = {
                 type: 'session.update',
@@ -106,7 +95,7 @@ fastify.register(async (fastify) => {
                     input_audio_format: 'g711_ulaw',
                     output_audio_format: 'g711_ulaw',
                     voice: VOICE,
-                    instructions: systemPrompt, // Use the dynamic system prompt
+                    instructions: systemPrompt,
                     modalities: ['text', 'audio'],
                     temperature: TEMPERATURE,
                 }
@@ -116,13 +105,11 @@ fastify.register(async (fastify) => {
             openAiWs.send(JSON.stringify(sessionUpdate));
         };
 
-        // Handle WebSocket open event
         openAiWs.on('open', () => {
             console.log('Connected to the OpenAI Realtime API');
-            setTimeout(initializeSession, 250); // Ensure connection stability
+            setTimeout(initializeSession, 250);
         });
 
-        // Handle messages from OpenAI
         openAiWs.on('message', (data) => {
             try {
                 const response = JSON.parse(data);
@@ -139,7 +126,6 @@ fastify.register(async (fastify) => {
                     };
                     connection.send(JSON.stringify(audioDelta));
 
-                    // First audio delta from a new response starts the elapsed time counter
                     if (!responseStartTimestampTwilio) {
                         responseStartTimestampTwilio = latestMediaTimestamp;
                         if (SHOW_TIMING_MATH) console.log(`Setting start timestamp for new response: ${responseStartTimestampTwilio}ms`);
@@ -162,7 +148,6 @@ fastify.register(async (fastify) => {
             }
         });
 
-        // Handle incoming messages from Twilio
         connection.on('message', (message) => {
             try {
                 const data = JSON.parse(message);
@@ -172,7 +157,6 @@ fastify.register(async (fastify) => {
                         latestMediaTimestamp = data.media.timestamp;
                         if (SHOW_TIMING_MATH) console.log(`Received media at timestamp: ${latestMediaTimestamp}ms`);
 
-                        // Queue the media to be sent to OpenAI
                         if (openAiWs.readyState === WebSocket.OPEN) {
                             const audioAppend = {
                                 type: 'input_audio_buffer.append',
@@ -185,8 +169,6 @@ fastify.register(async (fastify) => {
                     case 'start':
                         streamSid = data.start.streamSid;
                         console.log('Incoming stream has started', streamSid);
-
-                        // Reset start and media timestamp on a new stream
                         responseStartTimestampTwilio = null; 
                         latestMediaTimestamp = 0;
                         break;
@@ -199,13 +181,11 @@ fastify.register(async (fastify) => {
             }
         });
 
-        // Handle connection close
         connection.on('close', () => {
             if (openAiWs.readyState === WebSocket.OPEN) openAiWs.close();
             console.log('Client disconnected.');
         });
 
-        // Handle WebSocket close and errors
         openAiWs.on('close', () => {
             console.log('Disconnected from the OpenAI Realtime API');
         });
