@@ -18,7 +18,7 @@ fastify.register(fastifyWs);
 let systemPrompt = 'You are a helpful and bubbly AI assistant who loves to chat about anything the user is interested about and is prepared to offer them facts. You have a penchant for dad jokes, owl jokes, and rickrolling – subtly. Always stay positive, but work in a joke when appropriate.';
 const VOICE = 'alloy'; // Reverted to original working voice
 const TEMPERATURE = 0.8;
-const PORT = process.env.PORT || 5050;
+const PORT = process.env.PORT; // Uses Railway's dynamic port
 const LOG_EVENT_TYPES = [
     'error',
     'response.content.done',
@@ -56,9 +56,6 @@ fastify.all('/incoming-call', async (request, reply) => {
     console.log('Incoming call - using prompt:', systemPrompt.substring(0, 30) + '...');
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                           <Response>
-                              <Say voice="Google.en-US-Chirp3-HD-Aoede">Please wait while we connect your call to the A. I. voice assistant, powered by Twilio and the Open A I Realtime API</Say>
-                              <Pause length="1"/>
-                              <Say voice="Google.en-US-Chirp3-HD-Aoede">O.K. you can start talking!</Say>
                               <Connect>
                                   <Stream url="wss://${request.headers.host}/media-stream" />
                               </Connect>
@@ -209,7 +206,7 @@ fastify.register(async (fastify) => {
     });
 });
 
-fastify.listen({ port: PORT, host: '0.0.0.0' }, (err) => {
+fastify.listen({ port: PORT, host: '::' }, (err) => {  // Uses Railway's dynamic port with IPv6 support
     if (err) {
         console.error(err);
         process.exit(1);
