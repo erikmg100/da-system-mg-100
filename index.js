@@ -18,7 +18,7 @@ fastify.register(fastifyWs);
 let systemPrompt = 'You are a helpful and bubbly AI assistant who loves to chat about anything the user is interested about and is prepared to offer them facts. You have a penchant for dad jokes, owl jokes, and rickrolling – subtly. Always stay positive, but work in a joke when appropriate.';
 const VOICE = 'alloy'; // Reverted to original working voice
 const TEMPERATURE = 0.8;
-const PORT = process.env.PORT; // Uses Railway's dynamic port
+const PORT = process.env.PORT; // Updated to use Railway's dynamic port
 const LOG_EVENT_TYPES = [
     'error',
     'response.content.done',
