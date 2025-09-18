@@ -74,6 +74,7 @@ Always sound like you're having a natural conversation with a friend. Be genuine
 const VOICE = 'marin'; // Always use marin voice
 let TEMPERATURE = parseFloat(process.env.TEMPERATURE) || 0.8;
 let SPEAKS_FIRST = 'caller'; // 'caller' or 'ai'
+let GREETING_MESSAGE = 'Hello there! How can I help you today?';
 const PORT = process.env.PORT || 3000;
 
 // Track active connections for instant updates
@@ -118,7 +119,7 @@ fastify.route({
     url: '/api/update-prompt',
     handler: async (request, reply) => {
         try {
-            const { prompt, temperature, speaksFirst } = request.body;
+            const { prompt, temperature, speaksFirst, greetingMessage } = request.body;
             
             if (!prompt || typeof prompt !== 'string') {
                 return reply.status(400).send({ 
@@ -129,6 +130,7 @@ fastify.route({
             const oldPrompt = SYSTEM_MESSAGE;
             const oldTemperature = TEMPERATURE;
             const oldSpeaksFirst = SPEAKS_FIRST;
+            const oldGreetingMessage = GREETING_MESSAGE;
             
             // Update prompt, temperature, and speaksFirst
             SYSTEM_MESSAGE = prompt;
@@ -138,6 +140,9 @@ fastify.route({
             if (speaksFirst !== undefined) {
                 SPEAKS_FIRST = speaksFirst;
             }
+            if (greetingMessage !== undefined) {
+                GREETING_MESSAGE = greetingMessage;
+            }
             
             console.log('=== PROMPT, TEMPERATURE & SPEAKS FIRST UPDATE FROM LOVABLE ===');
             console.log('Previous prompt:', oldPrompt.substring(0, 100) + '...');
@@ -146,6 +151,8 @@ fastify.route({
             console.log('NEW temperature:', TEMPERATURE);
             console.log('Previous speaks first:', oldSpeaksFirst);
             console.log('NEW speaks first:', SPEAKS_FIRST);
+            console.log('Previous greeting message:', oldGreetingMessage);
+            console.log('NEW greeting message:', GREETING_MESSAGE);
             console.log('Active connections:', activeConnections.size);
             
             // UPDATE ALL ACTIVE SESSIONS IMMEDIATELY with new settings
@@ -180,10 +187,11 @@ fastify.route({
             
             reply.send({ 
                 success: true, 
-                message: 'System prompt, temperature, and speaks first updated successfully',
+                message: 'System prompt, temperature, speaks first, and greeting message updated successfully',
                 prompt: SYSTEM_MESSAGE,
                 temperature: TEMPERATURE,
                 speaksFirst: SPEAKS_FIRST,
+                greetingMessage: GREETING_MESSAGE,
                 activeSessionsUpdated: updatedSessions
             });
         } catch (error) {
@@ -202,6 +210,7 @@ fastify.get('/api/current-prompt', async (request, reply) => {
         voice: VOICE,
         temperature: TEMPERATURE,
         speaksFirst: SPEAKS_FIRST,
+        greetingMessage: GREETING_MESSAGE,
         activeConnections: activeConnections.size
     });
 });
@@ -299,7 +308,7 @@ fastify.register(async (fastify) => {
                     content: [
                         {
                             type: 'input_text',
-                            text: 'Greet the user with "Hello there! I am an AI voice assistant powered by Twilio and the OpenAI Realtime API. You can ask me for facts, jokes, or anything you can imagine. How can I help you?"'
+                            text: `Say this exact greeting to the caller: "${GREETING_MESSAGE}"`
                         }
                     ]
                 }
