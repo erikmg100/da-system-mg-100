@@ -72,7 +72,6 @@ EMOTIONAL RESPONSES:
 - Understanding: "Ah, I see what you mean", "That makes perfect sense"
 
 Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
-        temperature: 0.8,
         speaksFirst: 'caller',
         greetingMessage: 'Hello there! How can I help you today?'
     },
@@ -98,7 +97,6 @@ CONVERSATION FLOW:
 • End with reassurance and clear action items
 
 Remember: You're not just collecting information - you're the first person showing them that someone cares about their problem and wants to help.`,
-        temperature: 0.7,
         speaksFirst: 'ai',
         greetingMessage: 'Hello! This is Sarah from Smith & Associates Law Firm. I understand you may need some legal assistance today. How can I help you?'
     },
@@ -125,7 +123,6 @@ CONVERSATION FLOW:
 • Schedule appropriate follow-up
 
 Focus on being helpful, direct, and professionally reassuring for people dealing with family legal issues.`,
-        temperature: 0.6,
         speaksFirst: 'caller',
         greetingMessage: 'Hi, this is Michael from Smith & Associates. I specialize in family law matters. What can I help you with today?'
     }
@@ -271,7 +268,7 @@ fastify.route({
     handler: async (request, reply) => {
         try {
             const agentId = request.params.agentId || 'default';
-            const { prompt, temperature, speaksFirst, greetingMessage } = request.body;
+            const { prompt, speaksFirst, greetingMessage } = request.body;
             
             if (!prompt || typeof prompt !== 'string') {
                 return reply.status(400).send({ 
@@ -288,9 +285,6 @@ fastify.route({
             
             // Update agent-specific configuration
             AGENT_CONFIGS[agentId].systemMessage = prompt;
-            if (temperature !== undefined) {
-                AGENT_CONFIGS[agentId].temperature = parseFloat(temperature);
-            }
             if (speaksFirst !== undefined) {
                 AGENT_CONFIGS[agentId].speaksFirst = speaksFirst;
             }
@@ -301,8 +295,6 @@ fastify.route({
             console.log(`=== AGENT ${agentId.toUpperCase()} CONFIG UPDATE FROM LOVABLE ===`);
             console.log('Previous prompt:', oldConfig.systemMessage.substring(0, 100) + '...');
             console.log('NEW prompt:', AGENT_CONFIGS[agentId].systemMessage.substring(0, 100) + '...');
-            console.log('Previous temperature:', oldConfig.temperature);
-            console.log('NEW temperature:', AGENT_CONFIGS[agentId].temperature);
             console.log('Previous speaks first:', oldConfig.speaksFirst);
             console.log('NEW speaks first:', AGENT_CONFIGS[agentId].speaksFirst);
             console.log('Previous greeting message:', oldConfig.greetingMessage);
@@ -315,7 +307,6 @@ fastify.route({
                 message: `Agent ${agentId} configuration updated successfully`,
                 agentId,
                 prompt: AGENT_CONFIGS[agentId].systemMessage,
-                temperature: AGENT_CONFIGS[agentId].temperature,
                 speaksFirst: AGENT_CONFIGS[agentId].speaksFirst,
                 greetingMessage: AGENT_CONFIGS[agentId].greetingMessage
             });
@@ -337,7 +328,6 @@ fastify.get('/api/current-prompt/:agentId?', async (request, reply) => {
         agentId,
         prompt: config.systemMessage,
         voice: VOICE,
-        temperature: config.temperature,
         speaksFirst: config.speaksFirst,
         greetingMessage: config.greetingMessage,
         activeConnections: activeConnections.size
@@ -391,7 +381,7 @@ fastify.register(async (fastify) => {
         const connectionData = { connection, openAiWs: null, agentId };
 
         try {
-            openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime&temperature=${agentConfig.temperature}`, {
+            openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
                 headers: {
                     'Authorization': `Bearer ${OPENAI_API_KEY}`,
                 },
@@ -414,7 +404,6 @@ fastify.register(async (fastify) => {
             console.log('Agent ID:', agentId);
             console.log('Using SYSTEM_MESSAGE:', agentConfig.systemMessage.substring(0, 100) + '...');
             console.log('Using VOICE:', VOICE);
-            console.log('Using TEMPERATURE:', agentConfig.temperature);
             console.log('Using SPEAKS_FIRST:', agentConfig.speaksFirst);
             console.log('============================');
             
@@ -428,8 +417,7 @@ fastify.register(async (fastify) => {
                         input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
                         output: { format: { type: 'audio/pcmu' }, voice: 'marin' }, // Always marin voice
                     },
-                    instructions: agentConfig.systemMessage,
-                    temperature: agentConfig.temperature
+                    instructions: agentConfig.systemMessage
                 },
             };
             console.log('Sending session update:', JSON.stringify(sessionUpdate));
