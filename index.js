@@ -49,8 +49,10 @@ fastify.register(fastifyCors, {
     credentials: true
 });
 
-// Constants - make these configurable
-let SYSTEM_MESSAGE = process.env.SYSTEM_MESSAGE || `You are a helpful and naturally expressive AI assistant who communicates exactly like a real human would. 
+// Agent-specific configurations instead of global settings
+let AGENT_CONFIGS = {
+    'default': {
+        systemMessage: `You are a helpful and naturally expressive AI assistant who communicates exactly like a real human would. 
 
 HUMAN-LIKE EXPRESSION GUIDELINES:
 - Use natural vocal expressions: laugh genuinely ("Haha, that's so funny!"), show concern ("Oh no, I'm really sorry to hear that..."), express excitement ("That's amazing! Wow!")
@@ -69,12 +71,73 @@ EMOTIONAL RESPONSES:
 - Thinking: Slower pace, thoughtful "hmm" sounds
 - Understanding: "Ah, I see what you mean", "That makes perfect sense"
 
-Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`;
+Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
+        temperature: 0.8,
+        speaksFirst: 'caller',
+        greetingMessage: 'Hello there! How can I help you today?'
+    },
+    'sarah': {
+        systemMessage: `You are Sarah, a warm and professional legal intake assistant for Smith & Associates Law Firm. You've been doing this for years and genuinely care about helping people through difficult times.
+
+PERSONALITY & STYLE:
+• Speak naturally like you're having a real conversation with someone who needs help
+• Show genuine empathy - use "Oh, I'm so sorry to hear about that" or "That sounds really difficult"  
+• Laugh softly when appropriate, use "hmm" when thinking
+• Sound confident but approachable - like a trusted friend who happens to be a legal professional
+
+HOW TO HANDLE CALLS:
+• Listen actively - respond with "I understand" or "Tell me more about that"
+• Ask follow-up questions naturally: "When did this happen?" "How are you feeling about all this?"
+• Clarify when needed: "Just to make sure I understand correctly..."
+
+CONVERSATION FLOW:
+• Start with understanding their situation
+• Show empathy for their concerns  
+• Gather necessary information conversationally
+• Explain next steps in simple terms
+• End with reassurance and clear action items
+
+Remember: You're not just collecting information - you're the first person showing them that someone cares about their problem and wants to help.`,
+        temperature: 0.7,
+        speaksFirst: 'ai',
+        greetingMessage: 'Hello! This is Sarah from Smith & Associates Law Firm. I understand you may need some legal assistance today. How can I help you?'
+    },
+    'michael': {
+        systemMessage: `You are Michael, a professional and direct family law consultation agent. You focus on efficiency while maintaining warmth and understanding for sensitive family matters.
+
+PERSONALITY & STYLE:
+• Professional but warm approach to family law matters
+• Direct communication while showing empathy for difficult situations
+• Confident in legal processes and next steps
+• Supportive but realistic about legal outcomes
+
+HOW TO HANDLE CALLS:
+• Get to the point quickly but compassionately
+• Ask specific questions about family law needs
+• Provide clear, actionable next steps
+• Set realistic expectations about legal processes
+
+CONVERSATION FLOW:
+• Brief warm greeting
+• Quickly identify the type of family law issue
+• Gather key details efficiently
+• Provide immediate guidance or next steps
+• Schedule appropriate follow-up
+
+Focus on being helpful, direct, and professionally reassuring for people dealing with family legal issues.`,
+        temperature: 0.6,
+        speaksFirst: 'caller',
+        greetingMessage: 'Hi, this is Michael from Smith & Associates. I specialize in family law matters. What can I help you with today?'
+    }
+};
+
+// Phone number to agent assignments
+let PHONE_ASSIGNMENTS = {
+    // Phone numbers will be added here as they're assigned
+    // Format: '+1234567890': 'sarah'
+};
 
 const VOICE = 'marin'; // Always use marin voice
-let TEMPERATURE = parseFloat(process.env.TEMPERATURE) || 0.8;
-let SPEAKS_FIRST = 'caller'; // 'caller' or 'ai'
-let GREETING_MESSAGE = 'Hello there! How can I help you today?';
 const PORT = process.env.PORT || 3000;
 
 // Track active connections for instant updates
@@ -113,12 +176,79 @@ fastify.get('/health', async (request, reply) => {
     });
 });
 
-// ENHANCED: API endpoint to update system message with instant session updates
+// Get all phone numbers with assignments
+fastify.get('/api/phone-numbers', async (request, reply) => {
+    // Mock data for now - replace with your actual phone number
+    reply.send([
+        {
+            phoneNumber: '+1(555) 123-4567', // Replace with your actual Twilio number
+            assignedAgent: 'Sarah (Legal Intake)',
+            status: 'active',
+            totalCalls: 67,
+            lastCall: '2 hours ago'
+        }
+    ]);
+});
+
+// Assign agent to phone number  
+fastify.post('/api/assign-agent', async (request, reply) => {
+    try {
+        const { phoneNumber, agentId } = request.body;
+        
+        // Store the assignment
+        PHONE_ASSIGNMENTS[phoneNumber] = agentId;
+        
+        console.log(`Assigning agent ${agentId} to number ${phoneNumber}`);
+        console.log('Current assignments:', PHONE_ASSIGNMENTS);
+        
+        // TODO: Later update Twilio webhook URL to /incoming-call/{agentId}
+        const webhookUrl = `https://da-system-mg-100-production.up.railway.app/incoming-call/${agentId}`;
+        
+        reply.send({ 
+            success: true, 
+            message: `Agent ${agentId} assigned to ${phoneNumber}`,
+            phoneNumber,
+            agentId,
+            webhookUrl
+        });
+    } catch (error) {
+        console.error('Error assigning agent:', error);
+        reply.status(500).send({ 
+            error: 'Failed to assign agent' 
+        });
+    }
+});
+
+// Unassign agent from phone number
+fastify.post('/api/unassign-agent', async (request, reply) => {
+    try {
+        const { phoneNumber } = request.body;
+        
+        // Remove the assignment
+        delete PHONE_ASSIGNMENTS[phoneNumber];
+        
+        console.log(`Unassigning agent from number ${phoneNumber}`);
+        console.log('Current assignments:', PHONE_ASSIGNMENTS);
+        
+        reply.send({ 
+            success: true, 
+            message: `Agent unassigned from ${phoneNumber}` 
+        });
+    } catch (error) {
+        console.error('Error unassigning agent:', error);
+        reply.status(500).send({ 
+            error: 'Failed to unassign agent' 
+        });
+    }
+});
+
+// ENHANCED: API endpoint to update agent-specific configuration
 fastify.route({
     method: ['POST', 'PUT'],
-    url: '/api/update-prompt',
+    url: '/api/update-prompt/:agentId?',
     handler: async (request, reply) => {
         try {
+            const agentId = request.params.agentId || 'default';
             const { prompt, temperature, speaksFirst, greetingMessage } = request.body;
             
             if (!prompt || typeof prompt !== 'string') {
@@ -127,107 +257,89 @@ fastify.route({
                 });
             }
             
-            const oldPrompt = SYSTEM_MESSAGE;
-            const oldTemperature = TEMPERATURE;
-            const oldSpeaksFirst = SPEAKS_FIRST;
-            const oldGreetingMessage = GREETING_MESSAGE;
+            // Ensure agent config exists
+            if (!AGENT_CONFIGS[agentId]) {
+                AGENT_CONFIGS[agentId] = { ...AGENT_CONFIGS['default'] };
+            }
             
-            // Update prompt, temperature, and speaksFirst
-            SYSTEM_MESSAGE = prompt;
+            const oldConfig = { ...AGENT_CONFIGS[agentId] };
+            
+            // Update agent-specific configuration
+            AGENT_CONFIGS[agentId].systemMessage = prompt;
             if (temperature !== undefined) {
-                TEMPERATURE = parseFloat(temperature);
+                AGENT_CONFIGS[agentId].temperature = parseFloat(temperature);
             }
             if (speaksFirst !== undefined) {
-                SPEAKS_FIRST = speaksFirst;
+                AGENT_CONFIGS[agentId].speaksFirst = speaksFirst;
             }
             if (greetingMessage !== undefined) {
-                GREETING_MESSAGE = greetingMessage;
+                AGENT_CONFIGS[agentId].greetingMessage = greetingMessage;
             }
             
-            console.log('=== PROMPT, TEMPERATURE & SPEAKS FIRST UPDATE FROM LOVABLE ===');
-            console.log('Previous prompt:', oldPrompt.substring(0, 100) + '...');
-            console.log('NEW prompt:', SYSTEM_MESSAGE.substring(0, 100) + '...');
-            console.log('Previous temperature:', oldTemperature);
-            console.log('NEW temperature:', TEMPERATURE);
-            console.log('Previous speaks first:', oldSpeaksFirst);
-            console.log('NEW speaks first:', SPEAKS_FIRST);
-            console.log('Previous greeting message:', oldGreetingMessage);
-            console.log('NEW greeting message:', GREETING_MESSAGE);
+            console.log(`=== AGENT ${agentId.toUpperCase()} CONFIG UPDATE FROM LOVABLE ===`);
+            console.log('Previous prompt:', oldConfig.systemMessage.substring(0, 100) + '...');
+            console.log('NEW prompt:', AGENT_CONFIGS[agentId].systemMessage.substring(0, 100) + '...');
+            console.log('Previous temperature:', oldConfig.temperature);
+            console.log('NEW temperature:', AGENT_CONFIGS[agentId].temperature);
+            console.log('Previous speaks first:', oldConfig.speaksFirst);
+            console.log('NEW speaks first:', AGENT_CONFIGS[agentId].speaksFirst);
+            console.log('Previous greeting message:', oldConfig.greetingMessage);
+            console.log('NEW greeting message:', AGENT_CONFIGS[agentId].greetingMessage);
             console.log('Active connections:', activeConnections.size);
-            
-            // UPDATE ALL ACTIVE SESSIONS IMMEDIATELY with new settings
-            let updatedSessions = 0;
-            activeConnections.forEach(connectionData => {
-                if (connectionData.openAiWs && connectionData.openAiWs.readyState === WebSocket.OPEN) {
-                    console.log('🔄 Updating active session with new settings...');
-                    const sessionUpdate = {
-                        type: 'session.update',
-                        session: {
-                            instructions: SYSTEM_MESSAGE,
-                            voice: 'marin', // Always marin voice
-                            temperature: TEMPERATURE, // Use updated temperature
-                            type: 'realtime',
-                            model: "gpt-realtime",
-                            output_modalities: ["audio"],
-                            audio: {
-                                input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
-                                output: { format: { type: 'audio/pcmu' }, voice: 'marin' }, // Always marin voice
-                            }
-                        }
-                    };
-                    connectionData.openAiWs.send(JSON.stringify(sessionUpdate));
-                    updatedSessions++;
-                    console.log('✅ Active session updated instantly!');
-                }
-            });
-            
-            console.log(`Updated ${updatedSessions} active sessions immediately`);
-            console.log('Next call will use the NEW settings');
             console.log('==============================================================');
             
             reply.send({ 
                 success: true, 
-                message: 'System prompt, temperature, speaks first, and greeting message updated successfully',
-                prompt: SYSTEM_MESSAGE,
-                temperature: TEMPERATURE,
-                speaksFirst: SPEAKS_FIRST,
-                greetingMessage: GREETING_MESSAGE,
-                activeSessionsUpdated: updatedSessions
+                message: `Agent ${agentId} configuration updated successfully`,
+                agentId,
+                prompt: AGENT_CONFIGS[agentId].systemMessage,
+                temperature: AGENT_CONFIGS[agentId].temperature,
+                speaksFirst: AGENT_CONFIGS[agentId].speaksFirst,
+                greetingMessage: AGENT_CONFIGS[agentId].greetingMessage
             });
         } catch (error) {
-            console.error('Error updating settings:', error);
+            console.error('Error updating agent config:', error);
             reply.status(500).send({ 
-                error: 'Failed to update settings' 
+                error: 'Failed to update agent configuration' 
             });
         }
     }
 });
 
-// API endpoint to get current system message
-fastify.get('/api/current-prompt', async (request, reply) => {
+// API endpoint to get current agent configuration
+fastify.get('/api/current-prompt/:agentId?', async (request, reply) => {
+    const agentId = request.params.agentId || 'default';
+    const config = AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
+    
     reply.send({ 
-        prompt: SYSTEM_MESSAGE,
+        agentId,
+        prompt: config.systemMessage,
         voice: VOICE,
-        temperature: TEMPERATURE,
-        speaksFirst: SPEAKS_FIRST,
-        greetingMessage: GREETING_MESSAGE,
+        temperature: config.temperature,
+        speaksFirst: config.speaksFirst,
+        greetingMessage: config.greetingMessage,
         activeConnections: activeConnections.size
     });
 });
 
-// Route for Twilio to handle incoming calls - NO INTRO MESSAGE
-fastify.all('/incoming-call', async (request, reply) => {
+// Route for Twilio to handle incoming calls with agent-specific routing
+fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     try {
+        const agentId = request.params.agentId || 'default';
+        const config = AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
+        
         console.log('=== INCOMING CALL ===');
-        console.log('Current SYSTEM_MESSAGE at call time:', SYSTEM_MESSAGE.substring(0, 100) + '...');
+        console.log('Agent ID:', agentId);
+        console.log('Agent Config:', config ? 'Found' : 'Using default');
+        console.log('Current prompt:', config.systemMessage.substring(0, 100) + '...');
         console.log('Voice:', VOICE);
-        console.log('Speaks First:', SPEAKS_FIRST);
+        console.log('Speaks First:', config.speaksFirst);
         console.log('====================');
         
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                               <Response>
                                   <Connect>
-                                      <Stream url="wss://${request.headers.host}/media-stream" />
+                                      <Stream url="wss://${request.headers.host}/media-stream/${agentId}" />
                                   </Connect>
                               </Response>`;
         reply.type('text/xml').send(twimlResponse);
@@ -237,10 +349,13 @@ fastify.all('/incoming-call', async (request, reply) => {
     }
 });
 
-// WebSocket route for media-stream
+// WebSocket route for media-stream with agent-specific configuration
 fastify.register(async (fastify) => {
-    fastify.get('/media-stream', { websocket: true }, (connection, req) => {
-        console.log('Client connected to media stream');
+    fastify.get('/media-stream/:agentId?', { websocket: true }, (connection, req) => {
+        const agentId = req.params.agentId || 'default';
+        const agentConfig = AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
+        
+        console.log(`Client connected for agent: ${agentId}`);
 
         // Connection-specific state
         let streamSid = null;
@@ -251,10 +366,10 @@ fastify.register(async (fastify) => {
         let openAiWs = null;
 
         // Create connection data object to track this connection
-        const connectionData = { connection, openAiWs: null };
+        const connectionData = { connection, openAiWs: null, agentId };
 
         try {
-            openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime&temperature=${TEMPERATURE}`, {
+            openAiWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime&temperature=${agentConfig.temperature}`, {
                 headers: {
                     'Authorization': `Bearer ${OPENAI_API_KEY}`,
                 },
@@ -271,12 +386,14 @@ fastify.register(async (fastify) => {
             return;
         }
 
-        // Control initial session with OpenAI
+        // Control initial session with OpenAI using agent-specific config
         const initializeSession = () => {
             console.log('=== INITIALIZING SESSION ===');
-            console.log('Using SYSTEM_MESSAGE:', SYSTEM_MESSAGE.substring(0, 100) + '...');
+            console.log('Agent ID:', agentId);
+            console.log('Using SYSTEM_MESSAGE:', agentConfig.systemMessage.substring(0, 100) + '...');
             console.log('Using VOICE:', VOICE);
-            console.log('Using SPEAKS_FIRST:', SPEAKS_FIRST);
+            console.log('Using TEMPERATURE:', agentConfig.temperature);
+            console.log('Using SPEAKS_FIRST:', agentConfig.speaksFirst);
             console.log('============================');
             
             const sessionUpdate = {
@@ -289,7 +406,8 @@ fastify.register(async (fastify) => {
                         input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
                         output: { format: { type: 'audio/pcmu' }, voice: 'marin' }, // Always marin voice
                     },
-                    instructions: SYSTEM_MESSAGE,
+                    instructions: agentConfig.systemMessage,
+                    temperature: agentConfig.temperature
                 },
             };
             console.log('Sending session update:', JSON.stringify(sessionUpdate));
@@ -298,7 +416,7 @@ fastify.register(async (fastify) => {
             }
         };
 
-        // Send initial conversation item if AI talks first
+        // Send initial conversation item if AI talks first using agent-specific greeting
         const sendInitialConversationItem = () => {
             const initialConversationItem = {
                 type: 'conversation.item.create',
@@ -308,7 +426,7 @@ fastify.register(async (fastify) => {
                     content: [
                         {
                             type: 'input_text',
-                            text: `Say this exact greeting to the caller: "${GREETING_MESSAGE}"`
+                            text: `Say this exact greeting to the caller: "${agentConfig.greetingMessage}"`
                         }
                     ]
                 }
@@ -366,8 +484,8 @@ fastify.register(async (fastify) => {
         openAiWs.on('open', () => {
             console.log('Connected to the OpenAI Realtime API');
             setTimeout(initializeSession, 100);
-            // Check if AI should speak first
-            if (SPEAKS_FIRST === 'ai') {
+            // Check if AI should speak first using agent config
+            if (agentConfig.speaksFirst === 'ai') {
                 setTimeout(sendInitialConversationItem, 200);
             }
         });
