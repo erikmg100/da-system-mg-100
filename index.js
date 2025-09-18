@@ -637,7 +637,7 @@ fastify.register(async (fastify) => {
                 timeout: 30000
             });
             
-            // NEW: Transcription WebSocket
+            // NEW: Transcription WebSocket - FIXED VERSION
             transcriptionWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
                 headers: {
                     'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -681,27 +681,22 @@ fastify.register(async (fastify) => {
             }
         };
 
-        // NEW: Initialize transcription session
+        // FIXED: Initialize transcription session based on OpenAI forum post
         const initializeTranscriptionSession = () => {
             console.log('=== INITIALIZING TRANSCRIPTION SESSION ===');
             
             const transcriptionSessionUpdate = {
                 type: 'session.update',
                 session: {
-                    type: 'realtime',
-                    model: "gpt-realtime",
-                    input_audio_transcription: {
-                        model: 'gpt-4o-transcribe',
-                        prompt: `Call with ${agentConfig.name}. ${agentConfig.personality}. Expect legal and professional terminology.`,
-                        language: agentConfig.language || 'en'
-                    },
                     turn_detection: { type: 'server_vad' },
                     input_audio_format: 'g711_ulaw',
-                    output_audio_format: 'g711_ulaw',
-                    voice: 'marin',
+                    input_audio_transcription: {
+                        enabled: true,
+                        model: 'whisper-1'
+                    },
                     instructions: 'You are a transcription assistant. Only transcribe, do not respond.',
                     modalities: ['text'],
-                    include: ['item.input_audio_transcription.logprobs']
+                    temperature: 0.1
                 }
             };
             
@@ -823,7 +818,7 @@ fastify.register(async (fastify) => {
             }
         });
 
-        // NEW: Transcription WebSocket handlers
+        // FIXED: Transcription WebSocket handlers
         transcriptionWs.on('open', () => {
             console.log('Connected to OpenAI Transcription API');
             setTimeout(initializeTranscriptionSession, 200);
@@ -833,10 +828,8 @@ fastify.register(async (fastify) => {
             try {
                 const response = JSON.parse(data);
                 
-                if (response.type === 'conversation.item.input_audio_transcription.delta') {
-                    console.log(`Transcript delta: ${response.delta}`);
-                }
-
+                console.log(`📝 Transcription event: ${response.type}`);
+                
                 if (response.type === 'conversation.item.input_audio_transcription.completed') {
                     const transcriptEntry = {
                         id: response.item_id,
@@ -851,6 +844,10 @@ fastify.register(async (fastify) => {
                     if (callId) {
                         saveTranscriptEntry(callId, transcriptEntry);
                     }
+                }
+                
+                if (response.type === 'conversation.item.input_audio_transcription.delta') {
+                    console.log(`📝 Transcript delta: ${response.delta}`);
                 }
 
             } catch (error) {
