@@ -688,22 +688,19 @@ fastify.register(async (fastify) => {
             const transcriptionSessionUpdate = {
                 type: 'session.update',
                 session: {
-                    object: "realtime.transcription_session",
-                    input_audio_format: 'g711_ulaw',
-                    input_audio_transcription: [{
+                    type: 'realtime',
+                    model: "gpt-realtime",
+                    input_audio_transcription: {
                         model: 'gpt-4o-transcribe',
                         prompt: `Call with ${agentConfig.name}. ${agentConfig.personality}. Expect legal and professional terminology.`,
                         language: agentConfig.language || 'en'
-                    }],
-                    turn_detection: {
-                        type: 'server_vad',
-                        threshold: 0.5,
-                        prefix_padding_ms: 300,
-                        silence_duration_ms: 500
                     },
-                    input_audio_noise_reduction: {
-                        type: 'near_field'
-                    },
+                    turn_detection: { type: 'server_vad' },
+                    input_audio_format: 'g711_ulaw',
+                    output_audio_format: 'g711_ulaw',
+                    voice: 'marin',
+                    instructions: 'You are a transcription assistant. Only transcribe, do not respond.',
+                    modalities: ['text'],
                     include: ['item.input_audio_transcription.logprobs']
                 }
             };
