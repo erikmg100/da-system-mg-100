@@ -4,15 +4,30 @@ import dotenv from 'dotenv';
 import fastifyFormBody from '@fastify/formbody';
 import fastifyWs from '@fastify/websocket';
 import fastifyCors from '@fastify/cors';
+// NEW: Import Supabase
+import { createClient } from '@supabase/supabase-js';
 
 // Load environment variables from .env file
 dotenv.config();
 
 // Retrieve the OpenAI API key from environment variables.
-const { OPENAI_API_KEY } = process.env;
+const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY } = process.env;
 if (!OPENAI_API_KEY) {
     console.error('Missing OpenAI API key. Please set it in the .env file.');
     process.exit(1);
+}
+
+// NEW: Initialize Supabase client
+let supabase = null;
+if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+    try {
+        supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        console.log('✅ Supabase client initialized');
+    } catch (error) {
+        console.error('Failed to initialize Supabase:', error);
+    }
+} else {
+    console.warn('⚠️ Supabase credentials not found - call logging to database disabled');
 }
 
 // Initialize Fastify
@@ -197,7 +212,8 @@ function calculateConfidence(logprobs) {
     return Math.exp(avgLogprob);
 }
 
-function createCallRecord(callId, streamSid, agentId = 'default', callerNumber = 'Unknown') {
+// ENHANCED: Create call record with Supabase logging
+async function createCallRecord(callId, streamSid, agentId = 'default', callerNumber = 'Unknown') {
     const call = {
         id: callId,
         streamSid,
@@ -223,11 +239,37 @@ function createCallRecord(callId, streamSid, agentId = 'default', callerNumber =
         AGENT_CONFIGS[agentId].todayCalls++;
     }
     
+    // NEW: Save to Supabase
+    if (supabase) {
+        try {
+            const { error } = await supabase.from('call_activities').insert({
+                call_id: callId,
+                stream_sid: streamSid,
+                agent_id: agentId,
+                agent_name: AGENT_CONFIGS[agentId]?.name || 'Unknown',
+                caller_number: callerNumber,
+                start_time: call.startTime,
+                status: 'in_progress',
+                direction: 'inbound', // Most calls are inbound
+                created_at: call.startTime
+            });
+            
+            if (error) {
+                console.error('Error saving call to Supabase:', error);
+            } else {
+                console.log(`✅ Call ${callId} saved to Supabase`);
+            }
+        } catch (error) {
+            console.error('Error saving call to Supabase:', error);
+        }
+    }
+    
     console.log(`Created call record: ${callId} for agent: ${agentId}`);
     return call;
 }
 
-function updateCallRecord(callId, updates) {
+// ENHANCED: Update call record with Supabase sync
+async function updateCallRecord(callId, updates) {
     const callIndex = CALL_RECORDS.findIndex(call => call.id === callId);
     if (callIndex >= 0) {
         CALL_RECORDS[callIndex] = {
@@ -235,6 +277,40 @@ function updateCallRecord(callId, updates) {
             ...updates,
             endTime: updates.endTime || CALL_RECORDS[callIndex].endTime || new Date().toISOString()
         };
+        
+        // NEW: Update in Supabase
+        if (supabase) {
+            try {
+                const supabaseUpdates = {
+                    status: updates.status,
+                    end_time: CALL_RECORDS[callIndex].endTime,
+                    has_transcript: updates.hasTranscript,
+                    summary: updates.summary
+                };
+                
+                // Calculate duration if call is completed
+                if (updates.status === 'completed' && CALL_RECORDS[callIndex].startTime && CALL_RECORDS[callIndex].endTime) {
+                    const start = new Date(CALL_RECORDS[callIndex].startTime);
+                    const end = new Date(CALL_RECORDS[callIndex].endTime);
+                    const durationSeconds = Math.floor((end - start) / 1000);
+                    supabaseUpdates.duration_seconds = durationSeconds;
+                }
+                
+                const { error } = await supabase
+                    .from('call_activities')
+                    .update(supabaseUpdates)
+                    .eq('call_id', callId);
+                
+                if (error) {
+                    console.error('Error updating call in Supabase:', error);
+                } else {
+                    console.log(`✅ Call ${callId} updated in Supabase`);
+                }
+            } catch (error) {
+                console.error('Error updating call in Supabase:', error);
+            }
+        }
+        
         return CALL_RECORDS[callIndex];
     }
     return null;
@@ -981,6 +1057,7 @@ const start = async () => {
         console.log('✅ Voice conversation system: ACTIVE');
         console.log('✅ Real-time transcription: ACTIVE');
         console.log('✅ Dashboard APIs: ACTIVE');
+        console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
     } catch (err) {
         console.error('Failed to start server:', err);
         process.exit(1);
