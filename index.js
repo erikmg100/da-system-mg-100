@@ -73,9 +73,10 @@ Always sound like you're having a natural conversation with a friend. Be genuine
 
 const VOICE = 'marin'; // Always use marin voice
 let TEMPERATURE = parseFloat(process.env.TEMPERATURE) || 0.8;
+let SPEAKS_FIRST = 'caller'; // 'caller' or 'ai'
 const PORT = process.env.PORT || 3000;
 
-// 🚀 NEW: Track active connections for instant updates
+// Track active connections for instant updates
 let activeConnections = new Set();
 
 // List of Event Types to log to the console
@@ -111,13 +112,13 @@ fastify.get('/health', async (request, reply) => {
     });
 });
 
-// 🚀 ENHANCED: API endpoint to update system message with instant session updates
+// ENHANCED: API endpoint to update system message with instant session updates
 fastify.route({
     method: ['POST', 'PUT'],
     url: '/api/update-prompt',
     handler: async (request, reply) => {
         try {
-            const { prompt, temperature } = request.body;
+            const { prompt, temperature, speaksFirst } = request.body;
             
             if (!prompt || typeof prompt !== 'string') {
                 return reply.status(400).send({ 
@@ -127,25 +128,31 @@ fastify.route({
             
             const oldPrompt = SYSTEM_MESSAGE;
             const oldTemperature = TEMPERATURE;
+            const oldSpeaksFirst = SPEAKS_FIRST;
             
-            // Update both prompt and temperature
+            // Update prompt, temperature, and speaksFirst
             SYSTEM_MESSAGE = prompt;
             if (temperature !== undefined) {
                 TEMPERATURE = parseFloat(temperature);
             }
+            if (speaksFirst !== undefined) {
+                SPEAKS_FIRST = speaksFirst;
+            }
             
-            console.log('=== PROMPT & TEMPERATURE UPDATE FROM LOVABLE ===');
+            console.log('=== PROMPT, TEMPERATURE & SPEAKS FIRST UPDATE FROM LOVABLE ===');
             console.log('Previous prompt:', oldPrompt.substring(0, 100) + '...');
             console.log('NEW prompt:', SYSTEM_MESSAGE.substring(0, 100) + '...');
             console.log('Previous temperature:', oldTemperature);
             console.log('NEW temperature:', TEMPERATURE);
+            console.log('Previous speaks first:', oldSpeaksFirst);
+            console.log('NEW speaks first:', SPEAKS_FIRST);
             console.log('Active connections:', activeConnections.size);
             
-            // 🚀 UPDATE ALL ACTIVE SESSIONS IMMEDIATELY with new prompt AND temperature
+            // UPDATE ALL ACTIVE SESSIONS IMMEDIATELY with new settings
             let updatedSessions = 0;
             activeConnections.forEach(connectionData => {
                 if (connectionData.openAiWs && connectionData.openAiWs.readyState === WebSocket.OPEN) {
-                    console.log('🔄 Updating active session with new prompt and temperature...');
+                    console.log('🔄 Updating active session with new settings...');
                     const sessionUpdate = {
                         type: 'session.update',
                         session: {
@@ -168,20 +175,21 @@ fastify.route({
             });
             
             console.log(`Updated ${updatedSessions} active sessions immediately`);
-            console.log('Next call will use the NEW prompt and temperature');
-            console.log('==================================================');
+            console.log('Next call will use the NEW settings');
+            console.log('==============================================================');
             
             reply.send({ 
                 success: true, 
-                message: 'System prompt and temperature updated successfully',
+                message: 'System prompt, temperature, and speaks first updated successfully',
                 prompt: SYSTEM_MESSAGE,
                 temperature: TEMPERATURE,
+                speaksFirst: SPEAKS_FIRST,
                 activeSessionsUpdated: updatedSessions
             });
         } catch (error) {
-            console.error('Error updating prompt/temperature:', error);
+            console.error('Error updating settings:', error);
             reply.status(500).send({ 
-                error: 'Failed to update prompt/temperature' 
+                error: 'Failed to update settings' 
             });
         }
     }
@@ -193,6 +201,7 @@ fastify.get('/api/current-prompt', async (request, reply) => {
         prompt: SYSTEM_MESSAGE,
         voice: VOICE,
         temperature: TEMPERATURE,
+        speaksFirst: SPEAKS_FIRST,
         activeConnections: activeConnections.size
     });
 });
@@ -203,6 +212,7 @@ fastify.all('/incoming-call', async (request, reply) => {
         console.log('=== INCOMING CALL ===');
         console.log('Current SYSTEM_MESSAGE at call time:', SYSTEM_MESSAGE.substring(0, 100) + '...');
         console.log('Voice:', VOICE);
+        console.log('Speaks First:', SPEAKS_FIRST);
         console.log('====================');
         
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
@@ -231,7 +241,7 @@ fastify.register(async (fastify) => {
         let responseStartTimestampTwilio = null;
         let openAiWs = null;
 
-        // 🚀 NEW: Create connection data object to track this connection
+        // Create connection data object to track this connection
         const connectionData = { connection, openAiWs: null };
 
         try {
@@ -242,7 +252,7 @@ fastify.register(async (fastify) => {
                 timeout: 30000
             });
             
-            // 🚀 NEW: Store the OpenAI WebSocket in connection data and add to active connections
+            // Store the OpenAI WebSocket in connection data and add to active connections
             connectionData.openAiWs = openAiWs;
             activeConnections.add(connectionData);
             
@@ -257,6 +267,7 @@ fastify.register(async (fastify) => {
             console.log('=== INITIALIZING SESSION ===');
             console.log('Using SYSTEM_MESSAGE:', SYSTEM_MESSAGE.substring(0, 100) + '...');
             console.log('Using VOICE:', VOICE);
+            console.log('Using SPEAKS_FIRST:', SPEAKS_FIRST);
             console.log('============================');
             
             const sessionUpdate = {
@@ -346,8 +357,10 @@ fastify.register(async (fastify) => {
         openAiWs.on('open', () => {
             console.log('Connected to the OpenAI Realtime API');
             setTimeout(initializeSession, 100);
-            // Uncomment the following line to have AI speak first:
-            // sendInitialConversationItem();
+            // Check if AI should speak first
+            if (SPEAKS_FIRST === 'ai') {
+                setTimeout(sendInitialConversationItem, 200);
+            }
         });
 
         // Listen for messages from the OpenAI WebSocket
@@ -442,7 +455,7 @@ fastify.register(async (fastify) => {
         // Handle connection close
         connection.on('close', () => {
             console.log('Client disconnected from media stream');
-            // 🚀 NEW: Remove from active connections
+            // Remove from active connections
             activeConnections.delete(connectionData);
             if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
                 openAiWs.close();
@@ -457,7 +470,7 @@ fastify.register(async (fastify) => {
         // Handle OpenAI WebSocket close and errors
         openAiWs.on('close', (code, reason) => {
             console.log(`Disconnected from OpenAI Realtime API. Code: ${code}, Reason: ${reason}`);
-            // 🚀 NEW: Remove from active connections when OpenAI connection closes
+            // Remove from active connections when OpenAI connection closes
             activeConnections.delete(connectionData);
         });
 
