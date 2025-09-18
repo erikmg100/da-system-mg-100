@@ -176,29 +176,50 @@ fastify.get('/health', async (request, reply) => {
     });
 });
 
-// Get all phone numbers with assignments
+// Get all phone numbers with client assignments
 fastify.get('/api/phone-numbers', async (request, reply) => {
-    // Mock data for now - replace with your actual phone number
+    // For now, manually list your 3 numbers (yours + 2 law firms)
     reply.send([
         {
-            phoneNumber: '+1(555) 123-4567', // Replace with your actual Twilio number
+            phoneNumber: '+1(555) 123-4567', // Your original number
             assignedAgent: 'Sarah (Legal Intake)',
+            clientId: 'your-firm',
             status: 'active',
             totalCalls: 67,
             lastCall: '2 hours ago'
+        },
+        {
+            phoneNumber: '+1(987) 654-3210', // Law Firm 1's number  
+            assignedAgent: 'Sarah (Legal Intake)',
+            clientId: 'smith-associates',
+            status: 'active',
+            totalCalls: 23,
+            lastCall: '1 hour ago'
+        },
+        {
+            phoneNumber: '+1(555) 666-7777', // Law Firm 2's number
+            assignedAgent: 'Michael (Family Law)',
+            clientId: 'johnson-law',
+            status: 'active', 
+            totalCalls: 45,
+            lastCall: '30 minutes ago'
         }
     ]);
 });
 
-// Assign agent to phone number  
+// Assign agent to phone number with client context
 fastify.post('/api/assign-agent', async (request, reply) => {
     try {
-        const { phoneNumber, agentId } = request.body;
+        const { phoneNumber, agentId, clientId } = request.body;
         
-        // Store the assignment
-        PHONE_ASSIGNMENTS[phoneNumber] = agentId;
+        // Store assignment with client context
+        PHONE_ASSIGNMENTS[phoneNumber] = {
+            agentId,
+            clientId: clientId || 'default',
+            assignedAt: new Date().toISOString()
+        };
         
-        console.log(`Assigning agent ${agentId} to number ${phoneNumber}`);
+        console.log(`Client ${clientId || 'default'}: Assigning agent ${agentId} to ${phoneNumber}`);
         console.log('Current assignments:', PHONE_ASSIGNMENTS);
         
         // TODO: Later update Twilio webhook URL to /incoming-call/{agentId}
@@ -206,9 +227,10 @@ fastify.post('/api/assign-agent', async (request, reply) => {
         
         reply.send({ 
             success: true, 
-            message: `Agent ${agentId} assigned to ${phoneNumber}`,
+            message: `Agent ${agentId} assigned to ${phoneNumber}${clientId ? ` for client ${clientId}` : ''}`,
             phoneNumber,
             agentId,
+            clientId: clientId || 'default',
             webhookUrl
         });
     } catch (error) {
