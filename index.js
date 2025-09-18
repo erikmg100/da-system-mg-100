@@ -4,6 +4,13 @@ import dotenv from 'dotenv';
 import fastifyFormBody from '@fastify/formbody';
 import fastifyWs from '@fastify/websocket';
 import fastifyCors from '@fastify/cors';
+import FormData from 'form-data';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load environment variables from .env file
 dotenv.config();
@@ -86,7 +93,7 @@ PERSONALITY & STYLE:
 
 HOW TO HANDLE CALLS:
 • Listen actively - respond with "I understand" or "Tell me more about that"
-• Ask follow-up questions naturally: "When did this happen?" "How are you feeling about all this?"
+• Ask follow-up questions naturally: "When did this happened?" "How are you feeling about all this?"
 • Clarify when needed: "Just to make sure I understand correctly..."
 
 CONVERSATION FLOW:
@@ -139,6 +146,162 @@ const PORT = process.env.PORT || 3000;
 
 // Track active connections for instant updates
 let activeConnections = new Set();
+
+// Audio buffer management for Whisper transcription
+class AudioBuffer {
+    constructor(callId) {
+        this.callId = callId;
+        this.chunks = [];
+        this.isRecording = false;
+        this.lastTranscriptionTime = 0;
+        this.transcriptionInterval = 10000; // Transcribe every 10 seconds
+        this.tempDir = path.join(__dirname, 'temp');
+        
+        // Ensure temp directory exists
+        if (!fs.existsSync(this.tempDir)) {
+            fs.mkdirSync(this.tempDir, { recursive: true });
+        }
+    }
+
+    addChunk(audioData) {
+        if (this.isRecording) {
+            // Convert base64 to buffer and store
+            const buffer = Buffer.from(audioData, 'base64');
+            this.chunks.push(buffer);
+            
+            // Check if it's time to transcribe
+            const now = Date.now();
+            if (now - this.lastTranscriptionTime >= this.transcriptionInterval) {
+                this.transcribeAndClear();
+            }
+        }
+    }
+
+    startRecording() {
+        this.isRecording = true;
+        this.lastTranscriptionTime = Date.now();
+        console.log(`Started audio recording for call ${this.callId}`);
+    }
+
+    stopRecording() {
+        this.isRecording = false;
+        if (this.chunks.length > 0) {
+            this.transcribeAndClear();
+        }
+        console.log(`Stopped audio recording for call ${this.callId}`);
+    }
+
+    async transcribeAndClear() {
+        if (this.chunks.length === 0) return;
+
+        try {
+            // Combine all audio chunks
+            const audioBuffer = Buffer.concat(this.chunks);
+            
+            // Save to temporary file (Whisper needs a file, not raw buffer)
+            const tempFilePath = path.join(this.tempDir, `${this.callId}_${Date.now()}.wav`);
+            
+            // Convert PCM µ-law to WAV format that Whisper can process
+            const wavBuffer = this.convertPcmuToWav(audioBuffer);
+            fs.writeFileSync(tempFilePath, wavBuffer);
+            
+            // Send to Whisper for transcription
+            const transcript = await this.transcribeWithWhisper(tempFilePath);
+            
+            if (transcript && transcript.trim()) {
+                console.log(`\n=== WHISPER TRANSCRIPT (Call ${this.callId}) ===`);
+                console.log(transcript);
+                console.log(`============================================\n`);
+                
+                // Here you can save to database, send to webhook, etc.
+                await this.saveTranscript(transcript);
+            }
+            
+            // Clean up
+            this.chunks = [];
+            this.lastTranscriptionTime = Date.now();
+            
+            // Delete temp file
+            fs.unlinkSync(tempFilePath);
+            
+        } catch (error) {
+            console.error('Error transcribing audio:', error);
+            this.chunks = []; // Clear chunks even on error
+        }
+    }
+
+    convertPcmuToWav(pcmuBuffer) {
+        // This is a simplified conversion - you might want to use a proper audio library
+        // For now, we'll create a basic WAV header for the PCM data
+        const wavHeader = Buffer.alloc(44);
+        const dataLength = pcmuBuffer.length;
+        
+        // WAV header
+        wavHeader.write('RIFF', 0);
+        wavHeader.writeInt32LE(36 + dataLength, 4);
+        wavHeader.write('WAVE', 8);
+        wavHeader.write('fmt ', 12);
+        wavHeader.writeInt32LE(16, 16);
+        wavHeader.writeInt16LE(1, 20); // PCM format
+        wavHeader.writeInt16LE(1, 22); // Mono
+        wavHeader.writeInt32LE(8000, 24); // Sample rate
+        wavHeader.writeInt32LE(8000, 28); // Byte rate
+        wavHeader.writeInt16LE(1, 32); // Block align
+        wavHeader.writeInt16LE(8, 34); // Bits per sample
+        wavHeader.write('data', 36);
+        wavHeader.writeInt32LE(dataLength, 40);
+        
+        return Buffer.concat([wavHeader, pcmuBuffer]);
+    }
+
+    async transcribeWithWhisper(filePath) {
+        try {
+            const formData = new FormData();
+            formData.append('file', fs.createReadStream(filePath));
+            formData.append('model', 'whisper-1');
+            formData.append('language', 'en'); // Adjust as needed
+            
+            const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                    ...formData.getHeaders()
+                },
+                body: formData
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Whisper API error: ${response.status} ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            return result.text;
+        } catch (error) {
+            console.error('Whisper transcription error:', error);
+            return null;
+        }
+    }
+
+    async saveTranscript(transcript) {
+        // Save transcript to file or database
+        const logFile = path.join(__dirname, 'transcripts', `${this.callId}.txt`);
+        const transcriptDir = path.dirname(logFile);
+        
+        if (!fs.existsSync(transcriptDir)) {
+            fs.mkdirSync(transcriptDir, { recursive: true });
+        }
+        
+        const timestamp = new Date().toISOString();
+        const logEntry = `[${timestamp}] ${transcript}\n`;
+        
+        fs.appendFileSync(logFile, logEntry);
+    }
+
+    cleanup() {
+        // Clean up any remaining chunks
+        this.chunks = [];
+    }
+}
 
 // List of Event Types to log to the console
 const LOG_EVENT_TYPES = [
@@ -376,6 +539,7 @@ fastify.register(async (fastify) => {
         let markQueue = [];
         let responseStartTimestampTwilio = null;
         let openAiWs = null;
+        let audioBuffer = null; // For Whisper transcription
 
         // Create connection data object to track this connection
         const connectionData = { connection, openAiWs: null, agentId };
@@ -560,6 +724,12 @@ fastify.register(async (fastify) => {
                     case 'media':
                         latestMediaTimestamp = data.media.timestamp;
                         if (SHOW_TIMING_MATH) console.log(`Received media message with timestamp: ${latestMediaTimestamp}ms`);
+                        
+                        // Add audio to Whisper buffer for transcription
+                        if (audioBuffer) {
+                            audioBuffer.addChunk(data.media.payload);
+                        }
+                        
                         if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
                             const audioAppend = {
                                 type: 'input_audio_buffer.append',
@@ -571,6 +741,12 @@ fastify.register(async (fastify) => {
                     case 'start':
                         streamSid = data.start.streamSid;
                         console.log('Incoming stream has started', streamSid);
+                        
+                        // Initialize audio buffer for Whisper transcription
+                        const callId = `${agentId}_${streamSid}_${Date.now()}`;
+                        audioBuffer = new AudioBuffer(callId);
+                        audioBuffer.startRecording();
+                        
                         // Reset start and media timestamp on a new stream
                         responseStartTimestampTwilio = null;
                         latestMediaTimestamp = 0;
@@ -592,6 +768,13 @@ fastify.register(async (fastify) => {
         // Handle connection close
         connection.on('close', () => {
             console.log('Client disconnected from media stream');
+            
+            // Stop audio recording and transcribe final chunks
+            if (audioBuffer) {
+                audioBuffer.stopRecording();
+                audioBuffer.cleanup();
+            }
+            
             // Remove from active connections
             activeConnections.delete(connectionData);
             if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
