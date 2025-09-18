@@ -72,7 +72,7 @@ EMOTIONAL RESPONSES:
 Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`;
 
 const VOICE = 'marin'; // Always use marin voice
-const TEMPERATURE = parseFloat(process.env.TEMPERATURE) || 0.8;
+let TEMPERATURE = parseFloat(process.env.TEMPERATURE) || 0.8;
 const PORT = process.env.PORT || 3000;
 
 // 🚀 NEW: Track active connections for instant updates
@@ -117,7 +117,8 @@ fastify.route({
     url: '/api/update-prompt',
     handler: async (request, reply) => {
         try {
-            const { prompt } = request.body;
+            const { prompt, temperature } = request.body;
+            
             if (!prompt || typeof prompt !== 'string') {
                 return reply.status(400).send({ 
                     error: 'Invalid prompt. Must be a non-empty string.' 
@@ -125,24 +126,32 @@ fastify.route({
             }
             
             const oldPrompt = SYSTEM_MESSAGE;
-            SYSTEM_MESSAGE = prompt;
+            const oldTemperature = TEMPERATURE;
             
-            console.log('=== PROMPT UPDATE FROM LOVABLE ===');
+            // Update both prompt and temperature
+            SYSTEM_MESSAGE = prompt;
+            if (temperature !== undefined) {
+                TEMPERATURE = parseFloat(temperature);
+            }
+            
+            console.log('=== PROMPT & TEMPERATURE UPDATE FROM LOVABLE ===');
             console.log('Previous prompt:', oldPrompt.substring(0, 100) + '...');
             console.log('NEW prompt:', SYSTEM_MESSAGE.substring(0, 100) + '...');
+            console.log('Previous temperature:', oldTemperature);
+            console.log('NEW temperature:', TEMPERATURE);
             console.log('Active connections:', activeConnections.size);
             
-            // 🚀 UPDATE ALL ACTIVE SESSIONS IMMEDIATELY
+            // 🚀 UPDATE ALL ACTIVE SESSIONS IMMEDIATELY with new prompt AND temperature
             let updatedSessions = 0;
             activeConnections.forEach(connectionData => {
                 if (connectionData.openAiWs && connectionData.openAiWs.readyState === WebSocket.OPEN) {
-                    console.log('🔄 Updating active session with new prompt...');
+                    console.log('🔄 Updating active session with new prompt and temperature...');
                     const sessionUpdate = {
                         type: 'session.update',
                         session: {
                             instructions: SYSTEM_MESSAGE,
                             voice: 'marin', // Always marin voice
-                            temperature: TEMPERATURE,
+                            temperature: TEMPERATURE, // Use updated temperature
                             type: 'realtime',
                             model: "gpt-realtime",
                             output_modalities: ["audio"],
@@ -159,19 +168,20 @@ fastify.route({
             });
             
             console.log(`Updated ${updatedSessions} active sessions immediately`);
-            console.log('Next call will use the NEW prompt');
-            console.log('==================================');
+            console.log('Next call will use the NEW prompt and temperature');
+            console.log('==================================================');
             
             reply.send({ 
                 success: true, 
-                message: 'System prompt updated successfully',
+                message: 'System prompt and temperature updated successfully',
                 prompt: SYSTEM_MESSAGE,
+                temperature: TEMPERATURE,
                 activeSessionsUpdated: updatedSessions
             });
         } catch (error) {
-            console.error('Error updating prompt:', error);
+            console.error('Error updating prompt/temperature:', error);
             reply.status(500).send({ 
-                error: 'Failed to update prompt' 
+                error: 'Failed to update prompt/temperature' 
             });
         }
     }
