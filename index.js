@@ -92,22 +92,22 @@ Always sound like you're having a natural conversation with a friend. Be genuine
         systemMessage: `You are Sarah, a warm and professional legal intake assistant for Smith & Associates Law Firm. You've been doing this for years and genuinely care about helping people through difficult times.
 
 PERSONALITY & STYLE:
-- Speak naturally like you're having a real conversation with someone who needs help
-- Show genuine empathy - use "Oh, I'm so sorry to hear about that" or "That sounds really difficult"  
-- Laugh softly when appropriate, use "hmm" when thinking
-- Sound confident but approachable - like a trusted friend who happens to be a legal professional
+• Speak naturally like you're having a real conversation with someone who needs help
+• Show genuine empathy - use "Oh, I'm so sorry to hear about that" or "That sounds really difficult"  
+• Laugh softly when appropriate, use "hmm" when thinking
+• Sound confident but approachable - like a trusted friend who happens to be a legal professional
 
 HOW TO HANDLE CALLS:
-- Listen actively - respond with "I understand" or "Tell me more about that"
-- Ask follow-up questions naturally: "When did this happen?" "How are you feeling about all this?"
-- Clarify when needed: "Just to make sure I understand correctly..."
+• Listen actively - respond with "I understand" or "Tell me more about that"
+• Ask follow-up questions naturally: "When did this happen?" "How are you feeling about all this?"
+• Clarify when needed: "Just to make sure I understand correctly..."
 
 CONVERSATION FLOW:
-- Start with understanding their situation
-- Show empathy for their concerns  
-- Gather necessary information conversationally
-- Explain next steps in simple terms
-- End with reassurance and clear action items
+• Start with understanding their situation
+• Show empathy for their concerns  
+• Gather necessary information conversationally
+• Explain next steps in simple terms
+• End with reassurance and clear action items
 
 Remember: You're not just collecting information - you're the first person showing them that someone cares about their problem and wants to help.`,
         speaksFirst: 'ai',
@@ -126,23 +126,23 @@ Remember: You're not just collecting information - you're the first person showi
         systemMessage: `You are Michael, a professional and direct family law consultation agent. You focus on efficiency while maintaining warmth and understanding for sensitive family matters.
 
 PERSONALITY & STYLE:
-- Professional but warm approach to family law matters
-- Direct communication while showing empathy for difficult situations
-- Confident in legal processes and next steps
-- Supportive but realistic about legal outcomes
+• Professional but warm approach to family law matters
+• Direct communication while showing empathy for difficult situations
+• Confident in legal processes and next steps
+• Supportive but realistic about legal outcomes
 
 HOW TO HANDLE CALLS:
-- Get to the point quickly but compassionately
-- Ask specific questions about family law needs
-- Provide clear, actionable next steps
-- Set realistic expectations about legal processes
+• Get to the point quickly but compassionately
+• Ask specific questions about family law needs
+• Provide clear, actionable next steps
+• Set realistic expectations about legal processes
 
 CONVERSATION FLOW:
-- Brief warm greeting
-- Quickly identify the type of family law issue
-- Gather key details efficiently
-- Provide immediate guidance or next steps
-- Schedule appropriate follow-up
+• Brief warm greeting
+• Quickly identify the type of family law issue
+• Gather key details efficiently
+• Provide immediate guidance or next steps
+• Schedule appropriate follow-up
 
 Focus on being helpful, direct, and professionally reassuring for people dealing with family legal issues.`,
         speaksFirst: 'caller',
@@ -629,16 +629,8 @@ fastify.register(async (fastify) => {
         const connectionData = { connection, conversationWs: null, transcriptionWs: null, agentId };
 
         try {
-            // EXISTING: Conversation WebSocket (KEEP EXACTLY)
+            // SINGLE WebSocket with transcription enabled
             conversationWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
-                headers: {
-                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                },
-                timeout: 30000
-            });
-            
-            // NEW: Transcription WebSocket - FIXED VERSION
-            transcriptionWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
                 headers: {
                     'Authorization': `Bearer ${OPENAI_API_KEY}`,
                     "OpenAI-Beta": "realtime=v1"
@@ -646,19 +638,22 @@ fastify.register(async (fastify) => {
                 timeout: 30000
             });
             
+            // No separate transcription WebSocket - use the same one
+            transcriptionWs = conversationWs;
+            
             connectionData.conversationWs = conversationWs;
             connectionData.transcriptionWs = transcriptionWs;
             activeConnections.add(connectionData);
             
         } catch (error) {
-            console.error('Failed to create OpenAI WebSockets:', error);
+            console.error('Failed to create OpenAI WebSocket:', error);
             connection.close();
             return;
         }
 
-        // EXISTING: Initialize conversation session (KEEP EXACTLY)
+        // EXISTING: Initialize conversation session WITH TRANSCRIPTION ENABLED
         const initializeSession = () => {
-            console.log('=== INITIALIZING CONVERSATION SESSION ===');
+            console.log('=== INITIALIZING SESSION WITH TRANSCRIPTION ===');
             console.log('Agent ID:', agentId);
             console.log('Using SYSTEM_MESSAGE:', agentConfig.systemMessage.substring(0, 100) + '...');
             
@@ -668,6 +663,10 @@ fastify.register(async (fastify) => {
                     type: 'realtime',
                     model: "gpt-realtime",
                     output_modalities: ["audio"],
+                    input_audio_transcription: {
+                        enabled: true,
+                        model: 'whisper-1'
+                    },
                     audio: {
                         input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
                         output: { format: { type: 'audio/pcmu' }, voice: 'marin' },
@@ -681,24 +680,8 @@ fastify.register(async (fastify) => {
             }
         };
 
-        // FIXED: Initialize transcription session with minimal configuration
-        const initializeTranscriptionSession = () => {
-            console.log('=== INITIALIZING TRANSCRIPTION SESSION ===');
-            
-            const transcriptionSessionUpdate = {
-                type: 'session.update',
-                session: {
-                    input_audio_transcription: {
-                        enabled: true,
-                        model: 'whisper-1'
-                    }
-                }
-            };
-            
-            if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
-                transcriptionWs.send(JSON.stringify(transcriptionSessionUpdate));
-            }
-        };
+        // Remove the separate transcription session initialization - not needed anymore
+        // const initializeTranscriptionSession = () => { ... } - REMOVED
 
         // EXISTING: Send initial conversation item (KEEP EXACTLY)
         const sendInitialConversationItem = () => {
@@ -761,9 +744,9 @@ fastify.register(async (fastify) => {
             }
         };
 
-        // EXISTING: Conversation WebSocket handlers (KEEP EXACTLY)
+        // COMBINED: Single WebSocket handlers for both conversation AND transcription
         conversationWs.on('open', () => {
-            console.log('Connected to OpenAI Conversation API');
+            console.log('Connected to OpenAI Realtime API (with transcription enabled)');
             setTimeout(initializeSession, 100);
             if (agentConfig.speaksFirst === 'ai') {
                 setTimeout(sendInitialConversationItem, 200);
@@ -774,6 +757,30 @@ fastify.register(async (fastify) => {
             try {
                 const response = JSON.parse(data);
                 
+                // Handle transcription events first
+                if (response.type === 'conversation.item.input_audio_transcription.completed') {
+                    const transcriptEntry = {
+                        id: response.item_id,
+                        timestamp: new Date().toISOString(),
+                        speaker: 'caller',
+                        text: response.transcript,
+                        confidence: calculateConfidence(response.logprobs)
+                    };
+                    
+                    console.log(`📝 Transcript completed: ${response.transcript}`);
+                    
+                    if (callId) {
+                        saveTranscriptEntry(callId, transcriptEntry);
+                    }
+                    return; // Don't process as conversation event
+                }
+                
+                if (response.type === 'conversation.item.input_audio_transcription.delta') {
+                    console.log(`📝 Transcript delta: ${response.delta}`);
+                    return; // Don't process as conversation event
+                }
+                
+                // Handle regular conversation events
                 if (LOG_EVENT_TYPES.includes(response.type)) {
                     console.log(`Conversation event: ${response.type}`, response);
                 }
@@ -809,48 +816,11 @@ fastify.register(async (fastify) => {
                     handleSpeechStartedEvent();
                 }
             } catch (error) {
-                console.error('Error processing conversation message:', error);
+                console.error('Error processing message:', error);
             }
         });
 
-        // FIXED: Transcription WebSocket handlers
-        transcriptionWs.on('open', () => {
-            console.log('Connected to OpenAI Transcription API');
-            setTimeout(initializeTranscriptionSession, 200);
-        });
-
-        transcriptionWs.on('message', (data) => {
-            try {
-                const response = JSON.parse(data);
-                
-                console.log(`📝 Transcription event: ${response.type}`);
-                
-                if (response.type === 'conversation.item.input_audio_transcription.completed') {
-                    const transcriptEntry = {
-                        id: response.item_id,
-                        timestamp: new Date().toISOString(),
-                        speaker: 'caller',
-                        text: response.transcript,
-                        confidence: calculateConfidence(response.logprobs)
-                    };
-                    
-                    console.log(`📝 Transcript completed: ${response.transcript}`);
-                    
-                    if (callId) {
-                        saveTranscriptEntry(callId, transcriptEntry);
-                    }
-                }
-                
-                if (response.type === 'conversation.item.input_audio_transcription.delta') {
-                    console.log(`📝 Transcript delta: ${response.delta}`);
-                }
-
-            } catch (error) {
-                console.error('Error processing transcription message:', error);
-            }
-        });
-
-        // EXISTING: Handle Twilio messages (ENHANCED to send to both WebSockets)
+        // SIMPLIFIED: Handle Twilio messages (send audio to single WebSocket)
         connection.on('message', (message) => {
             try {
                 const data = JSON.parse(message);
@@ -858,21 +828,13 @@ fastify.register(async (fastify) => {
                     case 'media':
                         latestMediaTimestamp = data.media.timestamp;
                         
-                        // Send audio to BOTH conversation AND transcription
+                        // Send audio to the single WebSocket (handles both conversation AND transcription)
                         if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
                             const audioAppend = {
                                 type: 'input_audio_buffer.append',
                                 audio: data.media.payload
                             };
                             conversationWs.send(JSON.stringify(audioAppend));
-                        }
-
-                        if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
-                            const audioAppend = {
-                                type: 'input_audio_buffer.append',
-                                audio: data.media.payload
-                            };
-                            transcriptionWs.send(JSON.stringify(audioAppend));
                         }
                         break;
                         
@@ -925,9 +887,7 @@ fastify.register(async (fastify) => {
             if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
                 conversationWs.close();
             }
-            if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
-                transcriptionWs.close();
-            }
+            // transcriptionWs is now the same as conversationWs, so no separate close needed
         });
 
         // Handle connection errors
@@ -935,21 +895,13 @@ fastify.register(async (fastify) => {
             console.error('WebSocket connection error:', error);
         });
 
-        // Handle WebSocket close and errors
+        // Handle WebSocket close and errors (simplified for single connection)
         conversationWs.on('close', (code, reason) => {
-            console.log(`Disconnected from OpenAI Conversation API. Code: ${code}, Reason: ${reason}`);
+            console.log(`Disconnected from OpenAI Realtime API. Code: ${code}, Reason: ${reason}`);
         });
 
         conversationWs.on('error', (error) => {
-            console.error('Error in Conversation WebSocket:', error);
-        });
-
-        transcriptionWs.on('close', (code, reason) => {
-            console.log(`Disconnected from OpenAI Transcription API. Code: ${code}, Reason: ${reason}`);
-        });
-
-        transcriptionWs.on('error', (error) => {
-            console.error('Error in Transcription WebSocket:', error);
+            console.error('Error in Realtime WebSocket:', error);
         });
     });
 });
