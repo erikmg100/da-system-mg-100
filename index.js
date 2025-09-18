@@ -181,7 +181,7 @@ fastify.get('/api/phone-numbers', async (request, reply) => {
     // For now, manually list your 3 numbers (yours + 2 law firms)
     reply.send([
         {
-            phoneNumber: '+1(555) 123-4567', // Your original number
+            phoneNumber: '+14406931068', // Your actual Twilio number
             assignedAgent: 'Sarah (Legal Intake)',
             clientId: 'your-firm',
             status: 'active',
