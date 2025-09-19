@@ -10,19 +10,27 @@ import { createClient } from '@supabase/supabase-js';
 // Load environment variables from .env file
 dotenv.config();
 
-// Retrieve the OpenAI API key from environment variables.
-const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY } = process.env;
+// Retrieve the OpenAI API key and Supabase credentials from environment variables.
+const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY } = process.env;
 if (!OPENAI_API_KEY) {
     console.error('Missing OpenAI API key. Please set it in the .env file.');
     process.exit(1);
 }
 
-// NEW: Initialize Supabase client
+// NEW: Initialize Supabase client with SERVICE ROLE KEY for server-side operations
 let supabase = null;
-if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+    try {
+        supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        console.log('✅ Supabase client initialized with service role key');
+    } catch (error) {
+        console.error('Failed to initialize Supabase:', error);
+    }
+} else if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+    // Fallback to anon key if service role key not available
     try {
         supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        console.log('✅ Supabase client initialized');
+        console.warn('⚠️ Supabase initialized with anon key - some operations may fail due to RLS policies');
     } catch (error) {
         console.error('Failed to initialize Supabase:', error);
     }
