@@ -749,9 +749,9 @@ fastify.register(async (fastify) => {
                             format: { type: 'audio/pcmu' }, 
                             turn_detection: { 
                                 type: "server_vad",
-                                threshold: 0.7,              // Increased from default 0.5
-                                prefix_padding_ms: 600,      // Increased from default 300ms
-                                silence_duration_ms: 1200    // Increased from default 500ms
+                                threshold: 0.55,              // Increased from default 0.5
+                                prefix_padding_ms: 400,      // Increased from default 300ms
+                                silence_duration_ms: 700    // Increased from default 500ms
                             } 
                         },
                         output: { format: { type: 'audio/pcmu' }, voice: 'marin' },
