@@ -732,7 +732,7 @@ fastify.register(async (fastify) => {
             return;
         }
 
-        // EXISTING: Initialize conversation session (KEEP EXACTLY)
+        // MODIFIED: Initialize conversation session with adjusted turn detection
         const initializeSession = () => {
             console.log('=== INITIALIZING CONVERSATION SESSION ===');
             console.log('Agent ID:', agentId);
@@ -745,7 +745,15 @@ fastify.register(async (fastify) => {
                     model: "gpt-realtime",
                     output_modalities: ["audio"],
                     audio: {
-                        input: { format: { type: 'audio/pcmu' }, turn_detection: { type: "server_vad" } },
+                        input: { 
+                            format: { type: 'audio/pcmu' }, 
+                            turn_detection: { 
+                                type: "server_vad",
+                                threshold: 0.7,              // Increased from default 0.5
+                                prefix_padding_ms: 600,      // Increased from default 300ms
+                                silence_duration_ms: 1200    // Increased from default 500ms
+                            } 
+                        },
                         output: { format: { type: 'audio/pcmu' }, voice: 'marin' },
                     },
                     instructions: agentConfig.systemMessage
