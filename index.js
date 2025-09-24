@@ -553,6 +553,71 @@ fastify.get('/api/current-prompt/:agentId?', { preHandler: [requireUser] }, asyn
     });
 });
 
+// NEW: Hybrid sync endpoint for Lovable to push prompts directly to Railway
+fastify.post('/api/sync-prompt', async (request, reply) => {
+    try {
+        const { userId, agentId = 'default', prompt, speaksFirst, voice, fullConfig } = request.body;
+        
+        console.log(`🔄 Syncing prompt for userId: ${userId}, agentId: ${agentId}`);
+        
+        if (!userId) {
+            return reply.status(400).send({ error: 'userId is required' });
+        }
+
+        // Initialize user database if doesn't exist
+        if (!USER_DATABASE[userId]) {
+            console.log(`✅ Initialized user database for: ${userId}`);
+            USER_DATABASE[userId] = {
+                id: userId,
+                agents: {},
+                phoneAssignments: {},
+                callRecords: [],
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+        }
+
+        // Store the agent configuration
+        USER_DATABASE[userId].agents[agentId] = {
+            name: fullConfig?.name || 'Custom Assistant',
+            systemMessage: prompt, // This is the key field for voice calls
+            voice: voice || 'marin',
+            speaksFirst: speaksFirst ? 'assistant' : 'caller',
+            greetingMessage: fullConfig?.greetingMessage || 'Hello there! How can I help you today?',
+            id: agentId,
+            phone: fullConfig?.phone || '(440) 693-1068',
+            personality: fullConfig?.personality || 'Custom AI assistant',
+            language: 'en',
+            status: 'active',
+            totalCalls: fullConfig?.totalCalls || 0,
+            todayCalls: fullConfig?.todayCalls || 0,
+            createdAt: fullConfig?.createdAt || new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            ...fullConfig // Include any additional config
+        };
+
+        console.log(`✅ Synced agent config for user ${userId}:`, {
+            name: USER_DATABASE[userId].agents[agentId].name,
+            voice: USER_DATABASE[userId].agents[agentId].voice,
+            speaksFirst: USER_DATABASE[userId].agents[agentId].speaksFirst,
+            promptLength: prompt ? prompt.length : 0
+        });
+
+        reply.send({ 
+            success: true, 
+            message: 'Prompt synced successfully',
+            userId,
+            agentId 
+        });
+    } catch (error) {
+        console.error('Error syncing prompt:', error);
+        reply.status(500).send({ 
+            error: 'Failed to sync prompt', 
+            details: error.message 
+        });
+    }
+});
+
 // NEW: Dashboard API Routes (user-aware)
 
 // Get user's agents
@@ -1172,6 +1237,7 @@ const start = async () => {
         console.log('✅ Dashboard APIs: ACTIVE');
         console.log('✅ Multi-user support: ACTIVE');
         console.log('✅ User data isolation: ACTIVE');
+        console.log('✅ Lovable sync endpoint: ACTIVE');
         console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
     } catch (err) {
         console.error('Failed to start server:', err);
