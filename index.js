@@ -851,11 +851,11 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
         console.log('====================');
         
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
-                              <Response>
-                                  <Connect>
-                                      <Stream url="wss://${request.headers.host}/media-stream/${agentId}${userId ? `?userId=${userId}` : ''}" />
-                                  </Connect>
-                              </Response>`;
+                             <Response>
+        <Connect>
+            <Stream url="wss://${request.headers.host}/media-stream/${agentId}?userId=${userId}" />
+        </Connect>
+    </Response>`;
         reply.type('text/xml').send(twimlResponse);
     } catch (error) {
         console.error('Error handling incoming call:', error);
