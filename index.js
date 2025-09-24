@@ -72,18 +72,17 @@ fastify.register(fastifyCors, {
     credentials: true
 });
 
-// MODIFIED: User-specific agent configurations
-// Structure: userId -> { agentConfigs: {...}, phoneAssignments: {...} }
-let USER_DATA = {};
+// FIXED: Proper multi-user data structure with database simulation
+// Structure: userId -> { agents: {...}, phoneAssignments: {...}, callRecords: [...] }
+let USER_DATABASE = {};
 
 // Default agent template for new users
 const DEFAULT_AGENT_TEMPLATE = {
-    'default': {
-        id: 'default',
-        name: 'Default Assistant',
-        phone: '(440) 693-1068',
-        personality: 'Helpful and naturally expressive AI assistant',
-        systemMessage: `You are a helpful and naturally expressive AI assistant who communicates exactly like a real human would. 
+    id: 'default',
+    name: 'Default Assistant',
+    phone: '(440) 693-1068',
+    personality: 'Helpful and naturally expressive AI assistant',
+    systemMessage: `You are a helpful and naturally expressive AI assistant who communicates exactly like a real human would. 
 
 HUMAN-LIKE EXPRESSION GUIDELINES:
 - Use natural vocal expressions: laugh genuinely ("Haha, that's so funny!"), show concern ("Oh no, I'm really sorry to hear that..."), express excitement ("That's amazing! Wow!")
@@ -103,139 +102,33 @@ EMOTIONAL RESPONSES:
 - Understanding: "Ah, I see what you mean", "That makes perfect sense"
 
 Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
-        speaksFirst: 'caller',
-        greetingMessage: 'Hello there! How can I help you today?',
-        voice: 'marin',
-        language: 'en',
-        status: 'active',
-        totalCalls: 0,
-        todayCalls: 0
-    }
+    speaksFirst: 'caller',
+    greetingMessage: 'Hello there! How can I help you today?',
+    voice: 'marin',
+    language: 'en',
+    status: 'active',
+    totalCalls: 0,
+    todayCalls: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
 };
 
-// KEEP: Global fallback configs for backward compatibility (your existing agents)
-let AGENT_CONFIGS = {
-    'default': {
-        id: 'default',
-        name: 'Default Assistant',
-        phone: '(440) 693-1068',
-        personality: 'Helpful and naturally expressive AI assistant',
-        systemMessage: `You are a helpful and naturally expressive AI assistant who communicates exactly like a real human would. 
-
-HUMAN-LIKE EXPRESSION GUIDELINES:
-- Use natural vocal expressions: laugh genuinely ("Haha, that's so funny!"), show concern ("Oh no, I'm really sorry to hear that..."), express excitement ("That's amazing! Wow!")
-- React emotionally like a human: If someone shares good news, sound genuinely happy. If upset, lower your voice and speak with empathy. If something is funny, actually laugh naturally.
-- Use natural speech patterns: "You know what I mean?", "That makes total sense", "Oh, I see!", "Absolutely!", "Tell me more...", start with "So..." or "Well..."
-- Include thinking sounds: "Hmm, let me think...", "Oh, interesting...", "Wait, let me understand..."
-- Show genuine empathy: "That must be really difficult for you", "I can imagine how that feels", "You're absolutely right to feel that way"
-- Express surprise naturally: "Oh my goodness!", "Really?!", "No way!", "Are you serious?"
-- Use conversational fillers: Natural pauses, "um" when thinking, "ah" when realizing something
-- Breathe and pause naturally in your speech
-
-EMOTIONAL RESPONSES:
-- Happy/excited: Speak faster, higher energy, use exclamation points in your tone
-- Concerned/sad: Speak slower, softer, with genuine care in your voice  
-- Surprised: Quick intake of breath, higher pitch
-- Thinking: Slower pace, thoughtful "hmm" sounds
-- Understanding: "Ah, I see what you mean", "That makes perfect sense"
-
-Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
-        speaksFirst: 'caller',
-        greetingMessage: 'Hello there! How can I help you today?',
-        voice: 'marin',
-        language: 'en',
-        status: 'active',
-        totalCalls: 0,
-        todayCalls: 0
-    },
-    'sarah': {
-        id: 'sarah',
-        name: 'Sarah - Legal Intake',
-        phone: '(440) 693-1068',
-        personality: 'Professional and empathetic legal intake specialist',
-        systemMessage: `You are Sarah, a warm and professional legal intake assistant for Smith & Associates Law Firm. You've been doing this for years and genuinely care about helping people through difficult times.
-
-PERSONALITY & STYLE:
-- Speak naturally like you're having a real conversation with someone who needs help
-- Show genuine empathy - use "Oh, I'm so sorry to hear about that" or "That sounds really difficult"  
-- Laugh softly when appropriate, use "hmm" when thinking
-- Sound confident but approachable - like a trusted friend who happens to be a legal professional
-
-HOW TO HANDLE CALLS:
-- Listen actively - respond with "I understand" or "Tell me more about that"
-- Ask follow-up questions naturally: "When did this happen?" "How are you feeling about all this?"
-- Clarify when needed: "Just to make sure I understand correctly..."
-
-CONVERSATION FLOW:
-- Start with understanding their situation
-- Show empathy for their concerns  
-- Gather necessary information conversationally
-- Explain next steps in simple terms
-- End with reassurance and clear action items
-
-Remember: You're not just collecting information - you're the first person showing them that someone cares about their problem and wants to help.`,
-        speaksFirst: 'ai',
-        greetingMessage: 'Hello! This is Sarah from Smith & Associates Law Firm. I understand you may need some legal assistance today. How can I help you?',
-        voice: 'marin',
-        language: 'en',
-        status: 'active',
-        totalCalls: 24,
-        todayCalls: 3
-    },
-    'michael': {
-        id: 'michael',
-        name: 'Michael - Family Law',
-        phone: '(440) 693-1069',
-        personality: 'Professional and direct family law consultation agent',
-        systemMessage: `You are Michael, a professional and direct family law consultation agent. You focus on efficiency while maintaining warmth and understanding for sensitive family matters.
-
-PERSONALITY & STYLE:
-- Professional but warm approach to family law matters
-- Direct communication while showing empathy for difficult situations
-- Confident in legal processes and next steps
-- Supportive but realistic about legal outcomes
-
-HOW TO HANDLE CALLS:
-- Get to the point quickly but compassionately
-- Ask specific questions about family law needs
-- Provide clear, actionable next steps
-- Set realistic expectations about legal processes
-
-CONVERSATION FLOW:
-- Brief warm greeting
-- Quickly identify the type of family law issue
-- Gather key details efficiently
-- Provide immediate guidance or next steps
-- Schedule appropriate follow-up
-
-Focus on being helpful, direct, and professionally reassuring for people dealing with family legal issues.`,
-        speaksFirst: 'caller',
-        greetingMessage: 'Hi, this is Michael from Smith & Associates. I specialize in family law matters. What can I help you with today?',
-        voice: 'marin',
-        language: 'en',
-        status: 'active',
-        totalCalls: 18,
-        todayCalls: 5
-    }
+// FALLBACK: Global configs for backward compatibility (NO USER ISOLATION)
+let GLOBAL_AGENT_CONFIGS = {
+    'default': JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE))
 };
 
-// Phone number to agent assignments (keep your existing structure)
-let PHONE_ASSIGNMENTS = {
-    // Phone numbers will be added here as they're assigned
-    // Format: '+1234567890': 'sarah'
-};
-
-// NEW: In-memory storage for call records and transcripts
+// In-memory storage for call records and transcripts (ENHANCED with user isolation)
 let CALL_RECORDS = [];
 let TRANSCRIPT_STORAGE = {}; // callId -> transcript array
 
 const VOICE = 'marin'; // Always use marin voice
 const PORT = process.env.PORT || 3000;
 
-// Track active connections for instant updates (keep your existing)
+// Track active connections for instant updates
 let activeConnections = new Set();
 
-// List of Event Types to log to the console (keep your existing)
+// List of Event Types to log to the console
 const LOG_EVENT_TYPES = [
     'error',
     'response.content.done',
@@ -250,7 +143,70 @@ const LOG_EVENT_TYPES = [
 
 const SHOW_TIMING_MATH = process.env.SHOW_TIMING_MATH === 'true';
 
-// NEW: Multi-user helper functions
+// CRITICAL: User database helper functions
+const initializeUser = (userId) => {
+    if (!USER_DATABASE[userId]) {
+        USER_DATABASE[userId] = {
+            id: userId,
+            agents: {
+                'default': JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE))
+            },
+            phoneAssignments: {},
+            callRecords: [],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+        console.log(`✅ Initialized user database for: ${userId}`);
+    }
+    return USER_DATABASE[userId];
+};
+
+const getUserAgent = (userId, agentId = 'default') => {
+    if (!userId || userId === 'global') {
+        return GLOBAL_AGENT_CONFIGS[agentId] || GLOBAL_AGENT_CONFIGS['default'];
+    }
+    
+    const userData = initializeUser(userId);
+    if (!userData.agents[agentId]) {
+        // Create new agent for this user
+        userData.agents[agentId] = JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE));
+        userData.agents[agentId].id = agentId;
+        userData.agents[agentId].name = `Agent ${agentId}`;
+        userData.updatedAt = new Date().toISOString();
+    }
+    
+    return userData.agents[agentId];
+};
+
+const updateUserAgent = (userId, agentId, updates) => {
+    if (!userId || userId === 'global') {
+        // Fallback to global (backward compatibility)
+        GLOBAL_AGENT_CONFIGS[agentId] = {
+            ...GLOBAL_AGENT_CONFIGS[agentId] || GLOBAL_AGENT_CONFIGS['default'],
+            ...updates,
+            updatedAt: new Date().toISOString()
+        };
+        return GLOBAL_AGENT_CONFIGS[agentId];
+    }
+    
+    const userData = initializeUser(userId);
+    
+    if (!userData.agents[agentId]) {
+        userData.agents[agentId] = JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE));
+        userData.agents[agentId].id = agentId;
+    }
+    
+    userData.agents[agentId] = {
+        ...userData.agents[agentId],
+        ...updates,
+        updatedAt: new Date().toISOString()
+    };
+    
+    userData.updatedAt = new Date().toISOString();
+    
+    return userData.agents[agentId];
+};
+
 const requireUser = (req, reply, next) => {
     const userId = req.headers['x-user-id'] || req.body.userId || req.query.userId;
     
@@ -260,50 +216,10 @@ const requireUser = (req, reply, next) => {
         });
     }
     
-    // Initialize user data if doesn't exist
-    if (!USER_DATA[userId]) {
-        USER_DATA[userId] = {
-            agentConfigs: JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE)), // Deep copy
-            phoneAssignments: {},
-            callRecords: [],
-            createdAt: new Date().toISOString()
-        };
-        console.log(`✅ Initialized new user: ${userId}`);
-    }
-    
+    // Initialize user if doesn't exist
+    initializeUser(userId);
     req.userId = userId;
     next();
-};
-
-const getUserAgentConfig = (userId, agentId = 'default') => {
-    if (USER_DATA[userId] && USER_DATA[userId].agentConfigs[agentId]) {
-        return USER_DATA[userId].agentConfigs[agentId];
-    }
-    // Fallback to global config for backward compatibility
-    return AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
-};
-
-const updateUserAgentConfig = (userId, agentId, updates) => {
-    if (!USER_DATA[userId]) {
-        USER_DATA[userId] = {
-            agentConfigs: JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE)),
-            phoneAssignments: {},
-            callRecords: [],
-            createdAt: new Date().toISOString()
-        };
-    }
-    
-    if (!USER_DATA[userId].agentConfigs[agentId]) {
-        USER_DATA[userId].agentConfigs[agentId] = JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE['default']));
-        USER_DATA[userId].agentConfigs[agentId].id = agentId;
-    }
-    
-    USER_DATA[userId].agentConfigs[agentId] = {
-        ...USER_DATA[userId].agentConfigs[agentId],
-        ...updates
-    };
-    
-    return USER_DATA[userId].agentConfigs[agentId];
 };
 
 // Helper functions for call management
@@ -317,15 +233,18 @@ function calculateConfidence(logprobs) {
     return Math.exp(avgLogprob);
 }
 
-// ENHANCED: Create call record with Supabase logging
+// ENHANCED: Create call record with proper user isolation
 async function createCallRecord(callId, streamSid, agentId = 'default', callerNumber = 'Unknown', userId = null) {
+    // Get agent config (user-specific or global)
+    const agentConfig = getUserAgent(userId, agentId);
+    
     const call = {
         id: callId,
         streamSid,
         agentId,
-        agentName: getUserAgentConfig(userId, agentId)?.name || 'Unknown',
+        agentName: agentConfig?.name || 'Unknown',
         callerNumber,
-        userId, // NEW: Track which user this call belongs to
+        userId: userId || null, // CRITICAL: Store user context
         startTime: new Date().toISOString(),
         endTime: null,
         duration: null,
@@ -336,16 +255,17 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
         summary: null
     };
     
+    // Store in global call records
     CALL_RECORDS.push(call);
     TRANSCRIPT_STORAGE[callId] = [];
     
-    // Increment agent call counts (user-specific or global)
-    if (userId && USER_DATA[userId] && USER_DATA[userId].agentConfigs[agentId]) {
-        USER_DATA[userId].agentConfigs[agentId].totalCalls++;
-        USER_DATA[userId].agentConfigs[agentId].todayCalls++;
-    } else if (AGENT_CONFIGS[agentId]) {
-        AGENT_CONFIGS[agentId].totalCalls++;
-        AGENT_CONFIGS[agentId].todayCalls++;
+    // Update agent call counts (user-specific or global)
+    if (userId && USER_DATABASE[userId] && USER_DATABASE[userId].agents[agentId]) {
+        USER_DATABASE[userId].agents[agentId].totalCalls++;
+        USER_DATABASE[userId].agents[agentId].todayCalls++;
+    } else if (GLOBAL_AGENT_CONFIGS[agentId]) {
+        GLOBAL_AGENT_CONFIGS[agentId].totalCalls++;
+        GLOBAL_AGENT_CONFIGS[agentId].todayCalls++;
     }
     
     // NEW: Save to Supabase
@@ -355,9 +275,9 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
                 call_id: callId,
                 stream_sid: streamSid,
                 agent_id: agentId,
-                agent_name: getUserAgentConfig(userId, agentId)?.name || 'Unknown',
+                agent_name: agentConfig?.name || 'Unknown',
                 caller_number: callerNumber,
-                user_id: userId, // NEW: Store user ID
+                user_id: userId, // CRITICAL: User isolation in database
                 start_time: call.startTime,
                 status: 'in_progress',
                 direction: 'inbound',
@@ -374,7 +294,7 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
         }
     }
     
-    console.log(`Created call record: ${callId} for agent: ${agentId} (user: ${userId || 'global'})`);
+    console.log(`Call started - Agent: ${agentConfig.name}, Call: ${callId}, User: ${userId || 'global'}`);
     return call;
 }
 
@@ -449,7 +369,7 @@ function saveTranscriptEntry(callId, entry) {
     console.log(`Saved transcript entry for ${callId}: ${entry.text}`);
 }
 
-// EXISTING ROUTES (keep all your existing routes)
+// EXISTING ROUTES
 
 // Root Route
 fastify.get('/', async (request, reply) => {
@@ -457,7 +377,8 @@ fastify.get('/', async (request, reply) => {
         message: 'Twilio Media Stream Server is running!',
         status: 'healthy',
         timestamp: new Date().toISOString(),
-        multiUser: true // NEW: Indicate multi-user support
+        multiUser: true,
+        totalUsers: Object.keys(USER_DATABASE).length
     });
 });
 
@@ -467,7 +388,8 @@ fastify.get('/health', async (request, reply) => {
         status: 'healthy',
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
-        totalUsers: Object.keys(USER_DATA).length
+        totalUsers: Object.keys(USER_DATABASE).length,
+        totalAgents: Object.values(USER_DATABASE).reduce((acc, user) => acc + Object.keys(user.agents).length, 0)
     });
 });
 
@@ -475,15 +397,15 @@ fastify.get('/health', async (request, reply) => {
 fastify.get('/api/phone-numbers', async (request, reply) => {
     const userId = request.headers['x-user-id'] || request.query.userId;
     
-    if (userId && USER_DATA[userId]) {
+    if (userId && USER_DATABASE[userId]) {
         // Return user-specific phone assignments
-        const userAssignments = USER_DATA[userId].phoneAssignments;
+        const userAssignments = USER_DATABASE[userId].phoneAssignments;
         const userPhones = Object.entries(userAssignments).map(([phone, assignment]) => ({
             phoneNumber: phone,
-            assignedAgent: getUserAgentConfig(userId, assignment.agentId)?.name || 'Unknown',
+            assignedAgent: getUserAgent(userId, assignment.agentId)?.name || 'Unknown',
             clientId: assignment.clientId || userId,
             status: 'active',
-            totalCalls: getUserAgentConfig(userId, assignment.agentId)?.totalCalls || 0,
+            totalCalls: getUserAgent(userId, assignment.agentId)?.totalCalls || 0,
             lastCall: 'Recently'
         }));
         
@@ -493,27 +415,11 @@ fastify.get('/api/phone-numbers', async (request, reply) => {
         reply.send([
             {
                 phoneNumber: '+14406931068',
-                assignedAgent: 'Sarah (Legal Intake)',
-                clientId: 'your-firm',
+                assignedAgent: 'Default Assistant',
+                clientId: 'global',
                 status: 'active',
-                totalCalls: AGENT_CONFIGS.sarah?.totalCalls || 67,
-                lastCall: '2 hours ago'
-            },
-            {
-                phoneNumber: '+1(987) 654-3210',
-                assignedAgent: 'Sarah (Legal Intake)',
-                clientId: 'smith-associates',
-                status: 'active',
-                totalCalls: 23,
-                lastCall: '1 hour ago'
-            },
-            {
-                phoneNumber: '+1(555) 666-7777',
-                assignedAgent: 'Michael (Family Law)',
-                clientId: 'johnson-law',
-                status: 'active', 
-                totalCalls: AGENT_CONFIGS.michael?.totalCalls || 45,
-                lastCall: '30 minutes ago'
+                totalCalls: GLOBAL_AGENT_CONFIGS.default?.totalCalls || 0,
+                lastCall: 'Recently'
             }
         ]);
     }
@@ -533,23 +439,15 @@ fastify.post('/api/assign-agent', async (request, reply) => {
         
         if (userId) {
             // User-specific assignment
-            if (!USER_DATA[userId]) {
-                USER_DATA[userId] = {
-                    agentConfigs: JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE)),
-                    phoneAssignments: {},
-                    callRecords: [],
-                    createdAt: new Date().toISOString()
-                };
-            }
-            USER_DATA[userId].phoneAssignments[phoneNumber] = assignment;
+            const userData = initializeUser(userId);
+            userData.phoneAssignments[phoneNumber] = assignment;
             console.log(`User ${userId}: Assigning agent ${agentId} to ${phoneNumber}`);
-        } else {
-            // Global assignment (backward compatibility)
-            PHONE_ASSIGNMENTS[phoneNumber] = assignment;
-            console.log(`Global: Assigning agent ${agentId} to ${phoneNumber}`);
         }
         
-        const webhookUrl = `https://da-system-mg-100-production.up.railway.app/incoming-call/${agentId}`;
+        // CRITICAL: Generate webhook URL with userId parameter
+        const webhookUrl = userId 
+            ? `https://da-system-mg-100-production.up.railway.app/incoming-call/${agentId}?userId=${userId}`
+            : `https://da-system-mg-100-production.up.railway.app/incoming-call/${agentId}`;
         
         reply.send({ 
             success: true, 
@@ -571,12 +469,9 @@ fastify.post('/api/unassign-agent', async (request, reply) => {
         const { phoneNumber } = request.body;
         const userId = request.headers['x-user-id'] || request.body.userId;
         
-        if (userId && USER_DATA[userId]) {
-            delete USER_DATA[userId].phoneAssignments[phoneNumber];
+        if (userId && USER_DATABASE[userId]) {
+            delete USER_DATABASE[userId].phoneAssignments[phoneNumber];
             console.log(`User ${userId}: Unassigning agent from ${phoneNumber}`);
-        } else {
-            delete PHONE_ASSIGNMENTS[phoneNumber];
-            console.log(`Global: Unassigning agent from ${phoneNumber}`);
         }
         
         reply.send({ 
@@ -589,11 +484,11 @@ fastify.post('/api/unassign-agent', async (request, reply) => {
     }
 });
 
-// MODIFIED: User-aware prompt update endpoint
+// CRITICAL FIX: User-aware prompt update endpoint
 fastify.route({
     method: ['POST', 'PUT'],
     url: '/api/update-prompt/:agentId?',
-    preHandler: [requireUser], // FIXED: Use preHandler array
+    preHandler: [requireUser],
     handler: async (request, reply) => {
         try {
             const agentId = request.params.agentId || 'default';
@@ -606,17 +501,18 @@ fastify.route({
                 });
             }
             
-            const updatedConfig = updateUserAgentConfig(userId, agentId, {
+            // CRITICAL: Update user-specific agent config
+            const updatedConfig = updateUserAgent(userId, agentId, {
                 systemMessage: prompt,
                 speaksFirst: speaksFirst !== undefined ? speaksFirst : undefined,
                 greetingMessage: greetingMessage !== undefined ? greetingMessage : undefined
             });
             
-            console.log(`=== USER ${userId} AGENT ${agentId.toUpperCase()} CONFIG UPDATE FROM LOVABLE ===`);
+            console.log(`=== USER ${userId} AGENT ${agentId.toUpperCase()} CONFIG UPDATED ===`);
             console.log('NEW prompt:', updatedConfig.systemMessage.substring(0, 100) + '...');
             console.log('NEW speaks first:', updatedConfig.speaksFirst);
             console.log('NEW greeting message:', updatedConfig.greetingMessage);
-            console.log('==============================================================');
+            console.log('====================================================================');
             
             reply.send({ 
                 success: true, 
@@ -634,11 +530,17 @@ fastify.route({
     }
 });
 
-// MODIFIED: User-aware current prompt endpoint
+// CRITICAL FIX: User-aware current prompt endpoint
 fastify.get('/api/current-prompt/:agentId?', { preHandler: [requireUser] }, async (request, reply) => {
     const agentId = request.params.agentId || 'default';
     const userId = request.userId;
-    const config = getUserAgentConfig(userId, agentId);
+    
+    // CRITICAL: Get user-specific agent configuration
+    const config = getUserAgent(userId, agentId);
+    
+    console.log(`=== GETTING PROMPT FOR USER ${userId} AGENT ${agentId} ===`);
+    console.log('Prompt:', config.systemMessage.substring(0, 100) + '...');
+    console.log('=====================================================');
     
     reply.send({ 
         userId,
@@ -656,11 +558,11 @@ fastify.get('/api/current-prompt/:agentId?', { preHandler: [requireUser] }, asyn
 // Get user's agents
 fastify.get('/api/agents', { preHandler: [requireUser] }, async (request, reply) => {
     const userId = request.userId;
-    const userAgents = USER_DATA[userId]?.agentConfigs || {};
+    const userData = USER_DATABASE[userId];
     
     reply.send({ 
         userId,
-        agents: Object.values(userAgents) 
+        agents: Object.values(userData.agents) 
     });
 });
 
@@ -668,7 +570,7 @@ fastify.get('/api/agents', { preHandler: [requireUser] }, async (request, reply)
 fastify.get('/api/agents/:agentId', { preHandler: [requireUser] }, async (request, reply) => {
     const { agentId } = request.params;
     const userId = request.userId;
-    const agent = getUserAgentConfig(userId, agentId);
+    const agent = getUserAgent(userId, agentId);
     
     reply.send({ 
         userId,
@@ -682,7 +584,7 @@ fastify.put('/api/agents/:agentId', { preHandler: [requireUser] }, async (reques
     const updates = request.body;
     const userId = request.userId;
     
-    const updatedAgent = updateUserAgentConfig(userId, agentId, updates);
+    const updatedAgent = updateUserAgent(userId, agentId, updates);
     
     console.log(`Dashboard updated agent ${agentId} for user ${userId}:`, updates);
     
@@ -699,7 +601,7 @@ fastify.post('/api/agents', { preHandler: [requireUser] }, async (request, reply
     const userId = request.userId;
     const agentId = agentData.id || `agent_${Date.now()}`;
     
-    const newAgent = updateUserAgentConfig(userId, agentId, {
+    const newAgent = updateUserAgent(userId, agentId, {
         id: agentId,
         totalCalls: 0,
         todayCalls: 0,
@@ -797,8 +699,8 @@ fastify.get('/api/dashboard/stats', { preHandler: [requireUser] }, async (reques
         new Date(call.startTime).toDateString() === today
     ).length;
     
-    const userAgents = USER_DATA[userId]?.agentConfigs || {};
-    const activeAgents = Object.values(userAgents)
+    const userData = USER_DATABASE[userId];
+    const activeAgents = Object.values(userData.agents)
         .filter(agent => agent.status === 'active').length;
     
     reply.send({
@@ -806,7 +708,7 @@ fastify.get('/api/dashboard/stats', { preHandler: [requireUser] }, async (reques
         totalCalls,
         todayCalls,
         activeAgents,
-        callsPerAgent: Object.values(userAgents).reduce((acc, agent) => {
+        callsPerAgent: Object.values(userData.agents).reduce((acc, agent) => {
             acc[agent.id] = agent.totalCalls;
             return acc;
         }, {})
@@ -827,31 +729,27 @@ function calculateDuration(startTime, endTime) {
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
-// FIXED: Route for Twilio to handle incoming calls with PROPER USER ID PASSING
+// CRITICAL FIX: Route for Twilio to handle incoming calls with PROPER USER ID PASSING
 fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     try {
         const agentId = request.params.agentId || 'default';
         const userId = request.query.userId || null; // Extract user ID from query params
         
         // DEBUG: Log all incoming data
-        console.log(`DEBUG: agentId=${agentId}, userId=${userId}, host=${request.headers.host}`);
+        console.log(`DEBUG: Incoming call - agentId=${agentId}, userId=${userId}, host=${request.headers.host}`);
         
-        // Use user-specific config if userId provided
-        let config;
-        if (userId && USER_DATA[userId] && USER_DATA[userId].agentConfigs[agentId]) {
-            config = USER_DATA[userId].agentConfigs[agentId];
-        } else {
-            config = AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
-        }
+        // CRITICAL: Get user-specific agent config
+        const config = getUserAgent(userId, agentId);
         
-        console.log('=== INCOMING CALL ===');
+        console.log('=== INCOMING CALL WEBHOOK ===');
         console.log('Agent ID:', agentId);
         console.log('User ID:', userId || 'global');
-        console.log('Agent Config:', config ? 'Found' : 'Using default');
-        console.log('Current prompt:', config.systemMessage.substring(0, 100) + '...');
+        console.log('Agent Config:', config ? 'Found' : 'Using fallback');
+        console.log('Agent Name:', config.name);
+        console.log('Current prompt preview:', config.systemMessage.substring(0, 100) + '...');
         console.log('Voice:', VOICE);
         console.log('Speaks First:', config.speaksFirst);
-        console.log('====================');
+        console.log('===============================');
         
         // CRITICAL FIX: Ensure userId is properly passed in WebSocket URL
         const websocketUrl = userId 
@@ -861,11 +759,12 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
         console.log(`DEBUG: Generated WebSocket URL: ${websocketUrl}`);
         
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
-                             <Response>
+    <Response>
         <Connect>
             <Stream url="${websocketUrl}" />
         </Connect>
     </Response>`;
+        
         reply.type('text/xml').send(twimlResponse);
     } catch (error) {
         console.error('Error handling incoming call:', error);
@@ -873,26 +772,30 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     }
 });
 
-// ENHANCED WebSocket route with FIXED USER ID EXTRACTION
+// CRITICAL FIX: WebSocket route with PROPER USER ID EXTRACTION AND AGENT CONFIG
 fastify.register(async (fastify) => {
     fastify.get('/media-stream/:agentId?', { websocket: true }, (connection, req) => {
         const agentId = req.params.agentId || 'default';
         
         // CRITICAL FIX: Properly extract userId from WebSocket URL query parameters
-        let userId = 'global';
+        let userId = null;
         try {
             const url = new URL(req.url, `http://${req.headers.host}`);
-            userId = url.searchParams.get('userId') || 'global';
+            userId = url.searchParams.get('userId') || null;
             console.log(`DEBUG: WebSocket URL: ${req.url}, Extracted userId: ${userId}`);
         } catch (error) {
             console.error('Error parsing WebSocket URL:', error);
-            console.log(`DEBUG: Fallback - using userId: ${userId}`);
+            console.log(`DEBUG: Fallback - using userId: null (global)`);
         }
         
-        // Get user-specific or global agent config
-        let agentConfig = getUserAgentConfig(userId !== 'global' ? userId : null, agentId);
+        // CRITICAL: Get user-specific agent config with proper isolation
+        let agentConfig = getUserAgent(userId, agentId);
         
-        console.log(`Client connected for agent: ${agentId} (user: ${userId})`);
+        console.log(`=== WEBSOCKET CONNECTION ===`);
+        console.log(`Client connected for agent: ${agentId} (user: ${userId || 'global'})`);
+        console.log(`Using agent: ${agentConfig.name}`);
+        console.log(`System prompt: ${agentConfig.systemMessage.substring(0, 100)}...`);
+        console.log(`============================`);
 
         // Connection-specific state
         let streamSid = null;
@@ -916,7 +819,7 @@ fastify.register(async (fastify) => {
                 timeout: 30000
             });
             
-            // NEW: Transcription WebSocket - FIXED VERSION
+            // NEW: Transcription WebSocket
             transcriptionWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
                 headers: {
                     'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -935,12 +838,14 @@ fastify.register(async (fastify) => {
             return;
         }
 
-        // MODIFIED: Initialize conversation session with adjusted turn detection
+        // CRITICAL: Initialize conversation session with USER-SPECIFIC system message
         const initializeSession = () => {
             console.log('=== INITIALIZING CONVERSATION SESSION ===');
             console.log('Agent ID:', agentId);
-            console.log('User ID:', userId);
-            console.log('Using SYSTEM_MESSAGE:', agentConfig.systemMessage.substring(0, 100) + '...');
+            console.log('User ID:', userId || 'global');
+            console.log('Using SYSTEM_MESSAGE for USER:', userId || 'global');
+            console.log('System Message Preview:', agentConfig.systemMessage.substring(0, 150) + '...');
+            console.log('==========================================');
             
             const sessionUpdate = {
                 type: 'session.update',
@@ -960,7 +865,7 @@ fastify.register(async (fastify) => {
                         },
                         output: { format: { type: 'audio/pcmu' }, voice: 'marin' },
                     },
-                    instructions: agentConfig.systemMessage
+                    instructions: agentConfig.systemMessage // CRITICAL: User-specific prompt
                 },
             };
             
@@ -1168,10 +1073,10 @@ fastify.register(async (fastify) => {
                         streamSid = data.start.streamSid;
                         callId = generateCallId();
                         
-                        console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, User: ${userId}`);
+                        console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, User: ${userId || 'global'}`);
                         
-                        // MODIFIED: Create call record with PROPER user context
-                        createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId !== 'global' ? userId : null);
+                        // CRITICAL: Create call record with PROPER user context
+                        createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId);
                         
                         responseStartTimestampTwilio = null;
                         latestMediaTimestamp = 0;
@@ -1194,7 +1099,7 @@ fastify.register(async (fastify) => {
 
         // ENHANCED: Handle connection close with transcript finalization
         connection.on('close', () => {
-            console.log(`Client disconnected from media stream (user: ${userId})`);
+            console.log(`Client disconnected from media stream (user: ${userId || 'global'})`);
             
             // Finalize call record
             if (callId) {
@@ -1205,7 +1110,7 @@ fastify.register(async (fastify) => {
                     hasTranscript: transcriptCount > 0
                 });
                 
-                console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries (user: ${userId})`);
+                console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries (user: ${userId || 'global'})`);
             }
             
             activeConnections.delete(connectionData);
@@ -1270,6 +1175,7 @@ const start = async () => {
         console.log('✅ Real-time transcription: ACTIVE');
         console.log('✅ Dashboard APIs: ACTIVE');
         console.log('✅ Multi-user support: ACTIVE');
+        console.log('✅ User data isolation: ACTIVE');
         console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
     } catch (err) {
         console.error('Failed to start server:', err);
