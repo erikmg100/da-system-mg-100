@@ -827,11 +827,14 @@ function calculateDuration(startTime, endTime) {
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
-// Route for Twilio to handle incoming calls with agent-specific routing
+// FIXED: Route for Twilio to handle incoming calls with PROPER USER ID PASSING
 fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     try {
         const agentId = request.params.agentId || 'default';
-        const userId = request.query.userId || null; // NEW: Extract user ID from query params
+        const userId = request.query.userId || null; // Extract user ID from query params
+        
+        // DEBUG: Log all incoming data
+        console.log(`DEBUG: agentId=${agentId}, userId=${userId}, host=${request.headers.host}`);
         
         // Use user-specific config if userId provided
         let config;
@@ -850,10 +853,17 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
         console.log('Speaks First:', config.speaksFirst);
         console.log('====================');
         
+        // CRITICAL FIX: Ensure userId is properly passed in WebSocket URL
+        const websocketUrl = userId 
+            ? `wss://${request.headers.host}/media-stream/${agentId}?userId=${userId}`
+            : `wss://${request.headers.host}/media-stream/${agentId}`;
+        
+        console.log(`DEBUG: Generated WebSocket URL: ${websocketUrl}`);
+        
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                              <Response>
         <Connect>
-            <Stream url="wss://${request.headers.host}/media-stream/${agentId}?userId=${userId}" />
+            <Stream url="${websocketUrl}" />
         </Connect>
     </Response>`;
         reply.type('text/xml').send(twimlResponse);
@@ -863,13 +873,21 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     }
 });
 
-// ENHANCED WebSocket route with TRANSCRIPTION SUPPORT
+// ENHANCED WebSocket route with FIXED USER ID EXTRACTION
 fastify.register(async (fastify) => {
     fastify.get('/media-stream/:agentId?', { websocket: true }, (connection, req) => {
         const agentId = req.params.agentId || 'default';
-        // FIXED: Extract userId from WebSocket URL query parameters
-        const url = new URL(req.url, `http://${req.headers.host}`);
-        const userId = url.searchParams.get('userId') || 'global';
+        
+        // CRITICAL FIX: Properly extract userId from WebSocket URL query parameters
+        let userId = 'global';
+        try {
+            const url = new URL(req.url, `http://${req.headers.host}`);
+            userId = url.searchParams.get('userId') || 'global';
+            console.log(`DEBUG: WebSocket URL: ${req.url}, Extracted userId: ${userId}`);
+        } catch (error) {
+            console.error('Error parsing WebSocket URL:', error);
+            console.log(`DEBUG: Fallback - using userId: ${userId}`);
+        }
         
         // Get user-specific or global agent config
         let agentConfig = getUserAgentConfig(userId !== 'global' ? userId : null, agentId);
@@ -1152,7 +1170,7 @@ fastify.register(async (fastify) => {
                         
                         console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, User: ${userId}`);
                         
-                        // MODIFIED: Create call record with user context
+                        // MODIFIED: Create call record with PROPER user context
                         createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId !== 'global' ? userId : null);
                         
                         responseStartTimestampTwilio = null;
