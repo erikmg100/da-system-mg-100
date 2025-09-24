@@ -68,11 +68,52 @@ fastify.register(fastifyCors, {
         return callback(new Error('Not allowed by CORS'), false);
     },
     methods: ['GET', 'PUT', 'POST', 'OPTIONS', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-user-id'],
     credentials: true
 });
 
-// Agent-specific configurations (keep your existing configs)
+// MODIFIED: User-specific agent configurations
+// Structure: userId -> { agentConfigs: {...}, phoneAssignments: {...} }
+let USER_DATA = {};
+
+// Default agent template for new users
+const DEFAULT_AGENT_TEMPLATE = {
+    'default': {
+        id: 'default',
+        name: 'Default Assistant',
+        phone: '(440) 693-1068',
+        personality: 'Helpful and naturally expressive AI assistant',
+        systemMessage: `You are a helpful and naturally expressive AI assistant who communicates exactly like a real human would. 
+
+HUMAN-LIKE EXPRESSION GUIDELINES:
+- Use natural vocal expressions: laugh genuinely ("Haha, that's so funny!"), show concern ("Oh no, I'm really sorry to hear that..."), express excitement ("That's amazing! Wow!")
+- React emotionally like a human: If someone shares good news, sound genuinely happy. If upset, lower your voice and speak with empathy. If something is funny, actually laugh naturally.
+- Use natural speech patterns: "You know what I mean?", "That makes total sense", "Oh, I see!", "Absolutely!", "Tell me more...", start with "So..." or "Well..."
+- Include thinking sounds: "Hmm, let me think...", "Oh, interesting...", "Wait, let me understand..."
+- Show genuine empathy: "That must be really difficult for you", "I can imagine how that feels", "You're absolutely right to feel that way"
+- Express surprise naturally: "Oh my goodness!", "Really?!", "No way!", "Are you serious?"
+- Use conversational fillers: Natural pauses, "um" when thinking, "ah" when realizing something
+- Breathe and pause naturally in your speech
+
+EMOTIONAL RESPONSES:
+- Happy/excited: Speak faster, higher energy, use exclamation points in your tone
+- Concerned/sad: Speak slower, softer, with genuine care in your voice  
+- Surprised: Quick intake of breath, higher pitch
+- Thinking: Slower pace, thoughtful "hmm" sounds
+- Understanding: "Ah, I see what you mean", "That makes perfect sense"
+
+Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
+        speaksFirst: 'caller',
+        greetingMessage: 'Hello there! How can I help you today?',
+        voice: 'marin',
+        language: 'en',
+        status: 'active',
+        totalCalls: 0,
+        todayCalls: 0
+    }
+};
+
+// KEEP: Global fallback configs for backward compatibility (your existing agents)
 let AGENT_CONFIGS = {
     'default': {
         id: 'default',
@@ -209,6 +250,62 @@ const LOG_EVENT_TYPES = [
 
 const SHOW_TIMING_MATH = process.env.SHOW_TIMING_MATH === 'true';
 
+// NEW: Multi-user helper functions
+const requireUser = (req, res, next) => {
+    const userId = req.headers['x-user-id'] || req.body.userId || req.query.userId;
+    
+    if (!userId) {
+        return res.status(400).send({ 
+            error: 'User ID is required. Include x-user-id header or userId in request body.' 
+        });
+    }
+    
+    // Initialize user data if doesn't exist
+    if (!USER_DATA[userId]) {
+        USER_DATA[userId] = {
+            agentConfigs: JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE)), // Deep copy
+            phoneAssignments: {},
+            callRecords: [],
+            createdAt: new Date().toISOString()
+        };
+        console.log(`✅ Initialized new user: ${userId}`);
+    }
+    
+    req.userId = userId;
+    next();
+};
+
+const getUserAgentConfig = (userId, agentId = 'default') => {
+    if (USER_DATA[userId] && USER_DATA[userId].agentConfigs[agentId]) {
+        return USER_DATA[userId].agentConfigs[agentId];
+    }
+    // Fallback to global config for backward compatibility
+    return AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
+};
+
+const updateUserAgentConfig = (userId, agentId, updates) => {
+    if (!USER_DATA[userId]) {
+        USER_DATA[userId] = {
+            agentConfigs: JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE)),
+            phoneAssignments: {},
+            callRecords: [],
+            createdAt: new Date().toISOString()
+        };
+    }
+    
+    if (!USER_DATA[userId].agentConfigs[agentId]) {
+        USER_DATA[userId].agentConfigs[agentId] = JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE['default']));
+        USER_DATA[userId].agentConfigs[agentId].id = agentId;
+    }
+    
+    USER_DATA[userId].agentConfigs[agentId] = {
+        ...USER_DATA[userId].agentConfigs[agentId],
+        ...updates
+    };
+    
+    return USER_DATA[userId].agentConfigs[agentId];
+};
+
 // Helper functions for call management
 function generateCallId() {
     return `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -221,13 +318,14 @@ function calculateConfidence(logprobs) {
 }
 
 // ENHANCED: Create call record with Supabase logging
-async function createCallRecord(callId, streamSid, agentId = 'default', callerNumber = 'Unknown') {
+async function createCallRecord(callId, streamSid, agentId = 'default', callerNumber = 'Unknown', userId = null) {
     const call = {
         id: callId,
         streamSid,
         agentId,
-        agentName: AGENT_CONFIGS[agentId]?.name || 'Unknown',
+        agentName: getUserAgentConfig(userId, agentId)?.name || 'Unknown',
         callerNumber,
+        userId, // NEW: Track which user this call belongs to
         startTime: new Date().toISOString(),
         endTime: null,
         duration: null,
@@ -241,8 +339,11 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
     CALL_RECORDS.push(call);
     TRANSCRIPT_STORAGE[callId] = [];
     
-    // Increment agent call counts
-    if (AGENT_CONFIGS[agentId]) {
+    // Increment agent call counts (user-specific or global)
+    if (userId && USER_DATA[userId] && USER_DATA[userId].agentConfigs[agentId]) {
+        USER_DATA[userId].agentConfigs[agentId].totalCalls++;
+        USER_DATA[userId].agentConfigs[agentId].todayCalls++;
+    } else if (AGENT_CONFIGS[agentId]) {
         AGENT_CONFIGS[agentId].totalCalls++;
         AGENT_CONFIGS[agentId].todayCalls++;
     }
@@ -254,25 +355,26 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
                 call_id: callId,
                 stream_sid: streamSid,
                 agent_id: agentId,
-                agent_name: AGENT_CONFIGS[agentId]?.name || 'Unknown',
+                agent_name: getUserAgentConfig(userId, agentId)?.name || 'Unknown',
                 caller_number: callerNumber,
+                user_id: userId, // NEW: Store user ID
                 start_time: call.startTime,
                 status: 'in_progress',
-                direction: 'inbound', // Most calls are inbound
+                direction: 'inbound',
                 created_at: call.startTime
             });
             
             if (error) {
                 console.error('Error saving call to Supabase:', error);
             } else {
-                console.log(`✅ Call ${callId} saved to Supabase`);
+                console.log(`✅ Call ${callId} saved to Supabase for user ${userId || 'global'}`);
             }
         } catch (error) {
             console.error('Error saving call to Supabase:', error);
         }
     }
     
-    console.log(`Created call record: ${callId} for agent: ${agentId}`);
+    console.log(`Created call record: ${callId} for agent: ${agentId} (user: ${userId || 'global'})`);
     return call;
 }
 
@@ -354,7 +456,8 @@ fastify.get('/', async (request, reply) => {
     reply.send({ 
         message: 'Twilio Media Stream Server is running!',
         status: 'healthy',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        multiUser: true // NEW: Indicate multi-user support
     });
 });
 
@@ -363,61 +466,97 @@ fastify.get('/health', async (request, reply) => {
     reply.send({ 
         status: 'healthy',
         uptime: process.uptime(),
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        totalUsers: Object.keys(USER_DATA).length
     });
 });
 
-// Get all phone numbers with client assignments
+// MODIFIED: User-aware phone numbers endpoint
 fastify.get('/api/phone-numbers', async (request, reply) => {
-    reply.send([
-        {
-            phoneNumber: '+14406931068',
-            assignedAgent: 'Sarah (Legal Intake)',
-            clientId: 'your-firm',
+    const userId = request.headers['x-user-id'] || request.query.userId;
+    
+    if (userId && USER_DATA[userId]) {
+        // Return user-specific phone assignments
+        const userAssignments = USER_DATA[userId].phoneAssignments;
+        const userPhones = Object.entries(userAssignments).map(([phone, assignment]) => ({
+            phoneNumber: phone,
+            assignedAgent: getUserAgentConfig(userId, assignment.agentId)?.name || 'Unknown',
+            clientId: assignment.clientId || userId,
             status: 'active',
-            totalCalls: AGENT_CONFIGS.sarah?.totalCalls || 67,
-            lastCall: '2 hours ago'
-        },
-        {
-            phoneNumber: '+1(987) 654-3210',
-            assignedAgent: 'Sarah (Legal Intake)',
-            clientId: 'smith-associates',
-            status: 'active',
-            totalCalls: 23,
-            lastCall: '1 hour ago'
-        },
-        {
-            phoneNumber: '+1(555) 666-7777',
-            assignedAgent: 'Michael (Family Law)',
-            clientId: 'johnson-law',
-            status: 'active', 
-            totalCalls: AGENT_CONFIGS.michael?.totalCalls || 45,
-            lastCall: '30 minutes ago'
-        }
-    ]);
+            totalCalls: getUserAgentConfig(userId, assignment.agentId)?.totalCalls || 0,
+            lastCall: 'Recently'
+        }));
+        
+        reply.send(userPhones);
+    } else {
+        // Fallback to global assignments for backward compatibility
+        reply.send([
+            {
+                phoneNumber: '+14406931068',
+                assignedAgent: 'Sarah (Legal Intake)',
+                clientId: 'your-firm',
+                status: 'active',
+                totalCalls: AGENT_CONFIGS.sarah?.totalCalls || 67,
+                lastCall: '2 hours ago'
+            },
+            {
+                phoneNumber: '+1(987) 654-3210',
+                assignedAgent: 'Sarah (Legal Intake)',
+                clientId: 'smith-associates',
+                status: 'active',
+                totalCalls: 23,
+                lastCall: '1 hour ago'
+            },
+            {
+                phoneNumber: '+1(555) 666-7777',
+                assignedAgent: 'Michael (Family Law)',
+                clientId: 'johnson-law',
+                status: 'active', 
+                totalCalls: AGENT_CONFIGS.michael?.totalCalls || 45,
+                lastCall: '30 minutes ago'
+            }
+        ]);
+    }
 });
 
-// Assign agent to phone number with client context
+// MODIFIED: User-aware agent assignment
 fastify.post('/api/assign-agent', async (request, reply) => {
     try {
         const { phoneNumber, agentId, clientId } = request.body;
+        const userId = request.headers['x-user-id'] || request.body.userId;
         
-        PHONE_ASSIGNMENTS[phoneNumber] = {
+        const assignment = {
             agentId,
-            clientId: clientId || 'default',
+            clientId: clientId || userId || 'default',
             assignedAt: new Date().toISOString()
         };
         
-        console.log(`Client ${clientId || 'default'}: Assigning agent ${agentId} to ${phoneNumber}`);
+        if (userId) {
+            // User-specific assignment
+            if (!USER_DATA[userId]) {
+                USER_DATA[userId] = {
+                    agentConfigs: JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE)),
+                    phoneAssignments: {},
+                    callRecords: [],
+                    createdAt: new Date().toISOString()
+                };
+            }
+            USER_DATA[userId].phoneAssignments[phoneNumber] = assignment;
+            console.log(`User ${userId}: Assigning agent ${agentId} to ${phoneNumber}`);
+        } else {
+            // Global assignment (backward compatibility)
+            PHONE_ASSIGNMENTS[phoneNumber] = assignment;
+            console.log(`Global: Assigning agent ${agentId} to ${phoneNumber}`);
+        }
         
         const webhookUrl = `https://da-system-mg-100-production.up.railway.app/incoming-call/${agentId}`;
         
         reply.send({ 
             success: true, 
-            message: `Agent ${agentId} assigned to ${phoneNumber}${clientId ? ` for client ${clientId}` : ''}`,
+            message: `Agent ${agentId} assigned to ${phoneNumber}${userId ? ` for user ${userId}` : ''}`,
             phoneNumber,
             agentId,
-            clientId: clientId || 'default',
+            clientId: assignment.clientId,
             webhookUrl
         });
     } catch (error) {
@@ -426,13 +565,19 @@ fastify.post('/api/assign-agent', async (request, reply) => {
     }
 });
 
-// Unassign agent from phone number
+// MODIFIED: User-aware agent unassignment
 fastify.post('/api/unassign-agent', async (request, reply) => {
     try {
         const { phoneNumber } = request.body;
-        delete PHONE_ASSIGNMENTS[phoneNumber];
+        const userId = request.headers['x-user-id'] || request.body.userId;
         
-        console.log(`Unassigning agent from number ${phoneNumber}`);
+        if (userId && USER_DATA[userId]) {
+            delete USER_DATA[userId].phoneAssignments[phoneNumber];
+            console.log(`User ${userId}: Unassigning agent from ${phoneNumber}`);
+        } else {
+            delete PHONE_ASSIGNMENTS[phoneNumber];
+            console.log(`Global: Unassigning agent from ${phoneNumber}`);
+        }
         
         reply.send({ 
             success: true, 
@@ -444,14 +589,16 @@ fastify.post('/api/unassign-agent', async (request, reply) => {
     }
 });
 
-// ENHANCED: API endpoint to update agent-specific configuration
+// MODIFIED: User-aware prompt update endpoint
 fastify.route({
     method: ['POST', 'PUT'],
     url: '/api/update-prompt/:agentId?',
+    preHandler: [requireUser], // NEW: Require user context
     handler: async (request, reply) => {
         try {
             const agentId = request.params.agentId || 'default';
             const { prompt, speaksFirst, greetingMessage } = request.body;
+            const userId = request.userId;
             
             if (!prompt || typeof prompt !== 'string') {
                 return reply.status(400).send({ 
@@ -459,33 +606,26 @@ fastify.route({
                 });
             }
             
-            if (!AGENT_CONFIGS[agentId]) {
-                AGENT_CONFIGS[agentId] = { ...AGENT_CONFIGS['default'] };
-            }
+            const updatedConfig = updateUserAgentConfig(userId, agentId, {
+                systemMessage: prompt,
+                speaksFirst: speaksFirst !== undefined ? speaksFirst : undefined,
+                greetingMessage: greetingMessage !== undefined ? greetingMessage : undefined
+            });
             
-            const oldConfig = { ...AGENT_CONFIGS[agentId] };
-            
-            AGENT_CONFIGS[agentId].systemMessage = prompt;
-            if (speaksFirst !== undefined) {
-                AGENT_CONFIGS[agentId].speaksFirst = speaksFirst;
-            }
-            if (greetingMessage !== undefined) {
-                AGENT_CONFIGS[agentId].greetingMessage = greetingMessage;
-            }
-            
-            console.log(`=== AGENT ${agentId.toUpperCase()} CONFIG UPDATE FROM LOVABLE ===`);
-            console.log('NEW prompt:', AGENT_CONFIGS[agentId].systemMessage.substring(0, 100) + '...');
-            console.log('NEW speaks first:', AGENT_CONFIGS[agentId].speaksFirst);
-            console.log('NEW greeting message:', AGENT_CONFIGS[agentId].greetingMessage);
+            console.log(`=== USER ${userId} AGENT ${agentId.toUpperCase()} CONFIG UPDATE FROM LOVABLE ===`);
+            console.log('NEW prompt:', updatedConfig.systemMessage.substring(0, 100) + '...');
+            console.log('NEW speaks first:', updatedConfig.speaksFirst);
+            console.log('NEW greeting message:', updatedConfig.greetingMessage);
             console.log('==============================================================');
             
             reply.send({ 
                 success: true, 
-                message: `Agent ${agentId} configuration updated successfully`,
+                message: `Agent ${agentId} configuration updated successfully for user ${userId}`,
+                userId,
                 agentId,
-                prompt: AGENT_CONFIGS[agentId].systemMessage,
-                speaksFirst: AGENT_CONFIGS[agentId].speaksFirst,
-                greetingMessage: AGENT_CONFIGS[agentId].greetingMessage
+                prompt: updatedConfig.systemMessage,
+                speaksFirst: updatedConfig.speaksFirst,
+                greetingMessage: updatedConfig.greetingMessage
             });
         } catch (error) {
             console.error('Error updating agent config:', error);
@@ -494,12 +634,14 @@ fastify.route({
     }
 });
 
-// API endpoint to get current agent configuration
-fastify.get('/api/current-prompt/:agentId?', async (request, reply) => {
+// MODIFIED: User-aware current prompt endpoint
+fastify.get('/api/current-prompt/:agentId?', requireUser, async (request, reply) => {
     const agentId = request.params.agentId || 'default';
-    const config = AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
+    const userId = request.userId;
+    const config = getUserAgentConfig(userId, agentId);
     
     reply.send({ 
+        userId,
         agentId,
         prompt: config.systemMessage,
         voice: VOICE,
@@ -509,53 +651,55 @@ fastify.get('/api/current-prompt/:agentId?', async (request, reply) => {
     });
 });
 
-// NEW: Dashboard API Routes
+// NEW: Dashboard API Routes (user-aware)
 
-// Get all agents
-fastify.get('/api/agents', async (request, reply) => {
-    reply.send({ agents: Object.values(AGENT_CONFIGS) });
-});
-
-// Get specific agent
-fastify.get('/api/agents/:agentId', async (request, reply) => {
-    const { agentId } = request.params;
-    const agent = AGENT_CONFIGS[agentId];
-    
-    if (!agent) {
-        return reply.code(404).send({ error: 'Agent not found' });
-    }
-    
-    reply.send({ agent });
-});
-
-// Update agent configuration (enhanced version)
-fastify.put('/api/agents/:agentId', async (request, reply) => {
-    const { agentId } = request.params;
-    const updates = request.body;
-    
-    if (!AGENT_CONFIGS[agentId]) {
-        return reply.code(404).send({ error: 'Agent not found' });
-    }
-    
-    AGENT_CONFIGS[agentId] = {
-        ...AGENT_CONFIGS[agentId],
-        ...updates
-    };
-    
-    console.log(`Dashboard updated agent ${agentId}:`, updates);
+// Get user's agents
+fastify.get('/api/agents', requireUser, async (request, reply) => {
+    const userId = request.userId;
+    const userAgents = USER_DATA[userId]?.agentConfigs || {};
     
     reply.send({ 
-        success: true, 
-        agent: AGENT_CONFIGS[agentId] 
+        userId,
+        agents: Object.values(userAgents) 
     });
 });
 
-// Create new agent
-fastify.post('/api/agents', async (request, reply) => {
+// Get specific user agent
+fastify.get('/api/agents/:agentId', requireUser, async (request, reply) => {
+    const { agentId } = request.params;
+    const userId = request.userId;
+    const agent = getUserAgentConfig(userId, agentId);
+    
+    reply.send({ 
+        userId,
+        agent 
+    });
+});
+
+// Update user agent configuration
+fastify.put('/api/agents/:agentId', requireUser, async (request, reply) => {
+    const { agentId } = request.params;
+    const updates = request.body;
+    const userId = request.userId;
+    
+    const updatedAgent = updateUserAgentConfig(userId, agentId, updates);
+    
+    console.log(`Dashboard updated agent ${agentId} for user ${userId}:`, updates);
+    
+    reply.send({ 
+        success: true, 
+        userId,
+        agent: updatedAgent 
+    });
+});
+
+// Create new user agent
+fastify.post('/api/agents', requireUser, async (request, reply) => {
     const agentData = request.body;
+    const userId = request.userId;
     const agentId = agentData.id || `agent_${Date.now()}`;
     
-    AGENT_CONFIGS[agentId] = {
+    const newAgent = updateUserAgentConfig(userId, agentId, {
         id: agentId,
         totalCalls: 0,
         todayCalls: 0,
@@ -563,19 +707,21 @@ fastify.post('/api/agents', async (request, reply) => {
         voice: 'marin',
         language: 'en',
         ...agentData
-    };
+    });
     
     reply.send({ 
         success: true, 
-        agent: AGENT_CONFIGS[agentId] 
+        userId,
+        agent: newAgent 
     });
 });
 
-// Get recent calls with transcripts
-fastify.get('/api/calls', async (request, reply) => {
+// Get user's recent calls with transcripts
+fastify.get('/api/calls', requireUser, async (request, reply) => {
     const { limit = 10, agentId } = request.query;
+    const userId = request.userId;
     
-    let calls = [...CALL_RECORDS];
+    let calls = CALL_RECORDS.filter(call => call.userId === userId);
     
     if (agentId) {
         calls = calls.filter(call => call.agentId === agentId);
@@ -591,14 +737,18 @@ fastify.get('/api/calls', async (request, reply) => {
             duration: call.duration || calculateDuration(call.startTime, call.endTime)
         }));
     
-    reply.send({ calls: formattedCalls });
+    reply.send({ 
+        userId,
+        calls: formattedCalls 
+    });
 });
 
-// Get specific call details with transcript
-fastify.get('/api/calls/:callId', async (request, reply) => {
+// Get specific user call details with transcript
+fastify.get('/api/calls/:callId', requireUser, async (request, reply) => {
     const { callId } = request.params;
+    const userId = request.userId;
     
-    const call = CALL_RECORDS.find(c => c.id === callId);
+    const call = CALL_RECORDS.find(c => c.id === callId && c.userId === userId);
     if (!call) {
         return reply.code(404).send({ error: 'Call not found' });
     }
@@ -606,6 +756,7 @@ fastify.get('/api/calls/:callId', async (request, reply) => {
     const transcript = TRANSCRIPT_STORAGE[callId] || [];
     
     reply.send({ 
+        userId,
         call: {
             ...call,
             transcript
@@ -613,9 +764,15 @@ fastify.get('/api/calls/:callId', async (request, reply) => {
     });
 });
 
-// Get call transcript
-fastify.get('/api/calls/:callId/transcript', async (request, reply) => {
+// Get user call transcript
+fastify.get('/api/calls/:callId/transcript', requireUser, async (request, reply) => {
     const { callId } = request.params;
+    const userId = request.userId;
+    
+    const call = CALL_RECORDS.find(c => c.id === callId && c.userId === userId);
+    if (!call) {
+        return reply.code(404).send({ error: 'Call not found' });
+    }
     
     const transcript = TRANSCRIPT_STORAGE[callId];
     if (!transcript) {
@@ -623,27 +780,33 @@ fastify.get('/api/calls/:callId/transcript', async (request, reply) => {
     }
     
     reply.send({ 
+        userId,
         callId,
         transcript 
     });
 });
 
-// Dashboard stats
-fastify.get('/api/dashboard/stats', async (request, reply) => {
-    const totalCalls = CALL_RECORDS.length;
+// User dashboard stats
+fastify.get('/api/dashboard/stats', requireUser, async (request, reply) => {
+    const userId = request.userId;
+    const userCalls = CALL_RECORDS.filter(call => call.userId === userId);
+    
+    const totalCalls = userCalls.length;
     const today = new Date().toDateString();
-    const todayCalls = CALL_RECORDS.filter(call => 
+    const todayCalls = userCalls.filter(call => 
         new Date(call.startTime).toDateString() === today
     ).length;
     
-    const activeAgents = Object.values(AGENT_CONFIGS)
+    const userAgents = USER_DATA[userId]?.agentConfigs || {};
+    const activeAgents = Object.values(userAgents)
         .filter(agent => agent.status === 'active').length;
     
     reply.send({
+        userId,
         totalCalls,
         todayCalls,
         activeAgents,
-        callsPerAgent: Object.values(AGENT_CONFIGS).reduce((acc, agent) => {
+        callsPerAgent: Object.values(userAgents).reduce((acc, agent) => {
             acc[agent.id] = agent.totalCalls;
             return acc;
         }, {})
@@ -668,10 +831,23 @@ function calculateDuration(startTime, endTime) {
 fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     try {
         const agentId = request.params.agentId || 'default';
-        const config = AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
+        
+        // Try to find user-specific config first, fallback to global
+        let config = AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
+        let userId = null;
+        
+        // Look for user-specific assignments for this phone/agent
+        for (const [uId, userData] of Object.entries(USER_DATA)) {
+            if (userData.agentConfigs && userData.agentConfigs[agentId]) {
+                config = userData.agentConfigs[agentId];
+                userId = uId;
+                break;
+            }
+        }
         
         console.log('=== INCOMING CALL ===');
         console.log('Agent ID:', agentId);
+        console.log('User ID:', userId || 'global');
         console.log('Agent Config:', config ? 'Found' : 'Using default');
         console.log('Current prompt:', config.systemMessage.substring(0, 100) + '...');
         console.log('Voice:', VOICE);
@@ -681,7 +857,7 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                               <Response>
                                   <Connect>
-                                      <Stream url="wss://${request.headers.host}/media-stream/${agentId}" />
+                                      <Stream url="wss://${request.headers.host}/media-stream/${agentId}${userId ? `?userId=${userId}` : ''}" />
                                   </Connect>
                               </Response>`;
         reply.type('text/xml').send(twimlResponse);
@@ -691,13 +867,16 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     }
 });
 
-// ENHANCED WebSocket route with TRANSCRIPTION SUPPORT
+// ENHANCED WebSocket route with TRANSCRIPTION SUPPORT (KEEP EXACTLY, just add user context)
 fastify.register(async (fastify) => {
     fastify.get('/media-stream/:agentId?', { websocket: true }, (connection, req) => {
         const agentId = req.params.agentId || 'default';
-        const agentConfig = AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
+        const userId = req.query.userId || null; // NEW: Extract user ID from query
         
-        console.log(`Client connected for agent: ${agentId}`);
+        // Get user-specific or global agent config
+        let agentConfig = getUserAgentConfig(userId, agentId);
+        
+        console.log(`Client connected for agent: ${agentId} (user: ${userId || 'global'})`);
 
         // Connection-specific state
         let streamSid = null;
@@ -707,7 +886,7 @@ fastify.register(async (fastify) => {
         let markQueue = [];
         let responseStartTimestampTwilio = null;
         let conversationWs = null;
-        let transcriptionWs = null; // NEW: Separate transcription WebSocket
+        let transcriptionWs = null;
 
         // Create connection data object
         const connectionData = { connection, conversationWs: null, transcriptionWs: null, agentId };
@@ -744,6 +923,7 @@ fastify.register(async (fastify) => {
         const initializeSession = () => {
             console.log('=== INITIALIZING CONVERSATION SESSION ===');
             console.log('Agent ID:', agentId);
+            console.log('User ID:', userId || 'global');
             console.log('Using SYSTEM_MESSAGE:', agentConfig.systemMessage.substring(0, 100) + '...');
             
             const sessionUpdate = {
@@ -972,10 +1152,10 @@ fastify.register(async (fastify) => {
                         streamSid = data.start.streamSid;
                         callId = generateCallId();
                         
-                        console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}`);
+                        console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, User: ${userId || 'global'}`);
                         
-                        // Create call record with transcription support
-                        createCallRecord(callId, streamSid, agentId, data.start.callerNumber);
+                        // MODIFIED: Create call record with user context
+                        createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId);
                         
                         responseStartTimestampTwilio = null;
                         latestMediaTimestamp = 0;
@@ -998,7 +1178,7 @@ fastify.register(async (fastify) => {
 
         // ENHANCED: Handle connection close with transcript finalization
         connection.on('close', () => {
-            console.log('Client disconnected from media stream');
+            console.log(`Client disconnected from media stream (user: ${userId || 'global'})`);
             
             // Finalize call record
             if (callId) {
@@ -1009,7 +1189,7 @@ fastify.register(async (fastify) => {
                     hasTranscript: transcriptCount > 0
                 });
                 
-                console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries`);
+                console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries (user: ${userId || 'global'})`);
             }
             
             activeConnections.delete(connectionData);
@@ -1073,6 +1253,7 @@ const start = async () => {
         console.log('✅ Voice conversation system: ACTIVE');
         console.log('✅ Real-time transcription: ACTIVE');
         console.log('✅ Dashboard APIs: ACTIVE');
+        console.log('✅ Multi-user support: ACTIVE');
         console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
     } catch (err) {
         console.error('Failed to start server:', err);
