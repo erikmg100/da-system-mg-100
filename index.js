@@ -251,11 +251,11 @@ const LOG_EVENT_TYPES = [
 const SHOW_TIMING_MATH = process.env.SHOW_TIMING_MATH === 'true';
 
 // NEW: Multi-user helper functions
-const requireUser = (req, res, next) => {
+const requireUser = (req, reply, next) => {
     const userId = req.headers['x-user-id'] || req.body.userId || req.query.userId;
     
     if (!userId) {
-        return res.status(400).send({ 
+        return reply.status(400).send({ 
             error: 'User ID is required. Include x-user-id header or userId in request body.' 
         });
     }
@@ -593,7 +593,7 @@ fastify.post('/api/unassign-agent', async (request, reply) => {
 fastify.route({
     method: ['POST', 'PUT'],
     url: '/api/update-prompt/:agentId?',
-    preHandler: [requireUser], // NEW: Require user context
+    preHandler: [requireUser], // FIXED: Use preHandler array
     handler: async (request, reply) => {
         try {
             const agentId = request.params.agentId || 'default';
@@ -635,7 +635,7 @@ fastify.route({
 });
 
 // MODIFIED: User-aware current prompt endpoint
-fastify.get('/api/current-prompt/:agentId?', requireUser, async (request, reply) => {
+fastify.get('/api/current-prompt/:agentId?', { preHandler: [requireUser] }, async (request, reply) => {
     const agentId = request.params.agentId || 'default';
     const userId = request.userId;
     const config = getUserAgentConfig(userId, agentId);
@@ -654,7 +654,7 @@ fastify.get('/api/current-prompt/:agentId?', requireUser, async (request, reply)
 // NEW: Dashboard API Routes (user-aware)
 
 // Get user's agents
-fastify.get('/api/agents', requireUser, async (request, reply) => {
+fastify.get('/api/agents', { preHandler: [requireUser] }, async (request, reply) => {
     const userId = request.userId;
     const userAgents = USER_DATA[userId]?.agentConfigs || {};
     
@@ -665,7 +665,7 @@ fastify.get('/api/agents', requireUser, async (request, reply) => {
 });
 
 // Get specific user agent
-fastify.get('/api/agents/:agentId', requireUser, async (request, reply) => {
+fastify.get('/api/agents/:agentId', { preHandler: [requireUser] }, async (request, reply) => {
     const { agentId } = request.params;
     const userId = request.userId;
     const agent = getUserAgentConfig(userId, agentId);
@@ -677,7 +677,7 @@ fastify.get('/api/agents/:agentId', requireUser, async (request, reply) => {
 });
 
 // Update user agent configuration
-fastify.put('/api/agents/:agentId', requireUser, async (request, reply) => {
+fastify.put('/api/agents/:agentId', { preHandler: [requireUser] }, async (request, reply) => {
     const { agentId } = request.params;
     const updates = request.body;
     const userId = request.userId;
@@ -694,7 +694,7 @@ fastify.put('/api/agents/:agentId', requireUser, async (request, reply) => {
 });
 
 // Create new user agent
-fastify.post('/api/agents', requireUser, async (request, reply) => {
+fastify.post('/api/agents', { preHandler: [requireUser] }, async (request, reply) => {
     const agentData = request.body;
     const userId = request.userId;
     const agentId = agentData.id || `agent_${Date.now()}`;
@@ -717,7 +717,7 @@ fastify.post('/api/agents', requireUser, async (request, reply) => {
 });
 
 // Get user's recent calls with transcripts
-fastify.get('/api/calls', requireUser, async (request, reply) => {
+fastify.get('/api/calls', { preHandler: [requireUser] }, async (request, reply) => {
     const { limit = 10, agentId } = request.query;
     const userId = request.userId;
     
@@ -744,7 +744,7 @@ fastify.get('/api/calls', requireUser, async (request, reply) => {
 });
 
 // Get specific user call details with transcript
-fastify.get('/api/calls/:callId', requireUser, async (request, reply) => {
+fastify.get('/api/calls/:callId', { preHandler: [requireUser] }, async (request, reply) => {
     const { callId } = request.params;
     const userId = request.userId;
     
@@ -765,7 +765,7 @@ fastify.get('/api/calls/:callId', requireUser, async (request, reply) => {
 });
 
 // Get user call transcript
-fastify.get('/api/calls/:callId/transcript', requireUser, async (request, reply) => {
+fastify.get('/api/calls/:callId/transcript', { preHandler: [requireUser] }, async (request, reply) => {
     const { callId } = request.params;
     const userId = request.userId;
     
@@ -787,7 +787,7 @@ fastify.get('/api/calls/:callId/transcript', requireUser, async (request, reply)
 });
 
 // User dashboard stats
-fastify.get('/api/dashboard/stats', requireUser, async (request, reply) => {
+fastify.get('/api/dashboard/stats', { preHandler: [requireUser] }, async (request, reply) => {
     const userId = request.userId;
     const userCalls = CALL_RECORDS.filter(call => call.userId === userId);
     
