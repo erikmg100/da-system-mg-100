@@ -729,7 +729,7 @@ function calculateDuration(startTime, endTime) {
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
-// CRITICAL FIX: Route for Twilio to handle incoming calls with PROPER USER ID PASSING
+// CRITICAL FIX: Route for Twilio to handle incoming calls with USER ID IN URL PATH
 fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     try {
         const agentId = request.params.agentId || 'default';
@@ -751,9 +751,9 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
         console.log('Speaks First:', config.speaksFirst);
         console.log('===============================');
         
-        // CRITICAL FIX: Ensure userId is properly passed in WebSocket URL
+        // CRITICAL FIX: Put userId in URL PATH instead of query parameter
         const websocketUrl = userId 
-            ? `wss://${request.headers.host}/media-stream/${agentId}?userId=${userId}`
+            ? `wss://${request.headers.host}/media-stream/${agentId}/${userId}`
             : `wss://${request.headers.host}/media-stream/${agentId}`;
         
         console.log(`DEBUG: Generated WebSocket URL: ${websocketUrl}`);
@@ -772,21 +772,17 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     }
 });
 
-// CRITICAL FIX: WebSocket route with PROPER USER ID EXTRACTION AND AGENT CONFIG
+// CRITICAL FIX: WebSocket route with USER ID IN URL PATH
 fastify.register(async (fastify) => {
-    fastify.get('/media-stream/:agentId?', { websocket: true }, (connection, req) => {
+    fastify.get('/media-stream/:agentId/:userId?', { websocket: true }, (connection, req) => {
         const agentId = req.params.agentId || 'default';
         
-        // CRITICAL FIX: Properly extract userId from WebSocket URL query parameters
-        let userId = null;
-        try {
-            const url = new URL(req.url, `http://${req.headers.host}`);
-            userId = url.searchParams.get('userId') || null;
-            console.log(`DEBUG: WebSocket URL: ${req.url}, Extracted userId: ${userId}`);
-        } catch (error) {
-            console.error('Error parsing WebSocket URL:', error);
-            console.log(`DEBUG: Fallback - using userId: null (global)`);
-        }
+        // CRITICAL FIX: Get userId from URL path instead of query parameters
+        let userId = req.params.userId || null;
+        
+        // Log the extraction
+        console.log(`DEBUG: WebSocket URL: ${req.url}`);
+        console.log(`DEBUG: URL params - agentId: ${agentId}, userId: ${userId}`);
         
         // CRITICAL: Get user-specific agent config with proper isolation
         let agentConfig = getUserAgent(userId, agentId);
