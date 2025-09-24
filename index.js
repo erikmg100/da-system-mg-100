@@ -827,22 +827,18 @@ function calculateDuration(startTime, endTime) {
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
-// Route for Twilio to handle incoming calls with agent-specific routing (KEEP EXACTLY)
+// Route for Twilio to handle incoming calls with agent-specific routing
 fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     try {
         const agentId = request.params.agentId || 'default';
+        const userId = request.query.userId || null; // NEW: Extract user ID from query params
         
-        // Try to find user-specific config first, fallback to global
-        let config = AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
-        let userId = null;
-        
-        // Look for user-specific assignments for this phone/agent
-        for (const [uId, userData] of Object.entries(USER_DATA)) {
-            if (userData.agentConfigs && userData.agentConfigs[agentId]) {
-                config = userData.agentConfigs[agentId];
-                userId = uId;
-                break;
-            }
+        // Use user-specific config if userId provided
+        let config;
+        if (userId && USER_DATA[userId] && USER_DATA[userId].agentConfigs[agentId]) {
+            config = USER_DATA[userId].agentConfigs[agentId];
+        } else {
+            config = AGENT_CONFIGS[agentId] || AGENT_CONFIGS['default'];
         }
         
         console.log('=== INCOMING CALL ===');
@@ -867,16 +863,18 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     }
 });
 
-// ENHANCED WebSocket route with TRANSCRIPTION SUPPORT (KEEP EXACTLY, just add user context)
+// ENHANCED WebSocket route with TRANSCRIPTION SUPPORT
 fastify.register(async (fastify) => {
     fastify.get('/media-stream/:agentId?', { websocket: true }, (connection, req) => {
         const agentId = req.params.agentId || 'default';
-        const userId = req.query.userId || null; // NEW: Extract user ID from query
+        // FIXED: Extract userId from WebSocket URL query parameters
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const userId = url.searchParams.get('userId') || 'global';
         
         // Get user-specific or global agent config
-        let agentConfig = getUserAgentConfig(userId, agentId);
+        let agentConfig = getUserAgentConfig(userId !== 'global' ? userId : null, agentId);
         
-        console.log(`Client connected for agent: ${agentId} (user: ${userId || 'global'})`);
+        console.log(`Client connected for agent: ${agentId} (user: ${userId})`);
 
         // Connection-specific state
         let streamSid = null;
@@ -892,7 +890,7 @@ fastify.register(async (fastify) => {
         const connectionData = { connection, conversationWs: null, transcriptionWs: null, agentId };
 
         try {
-            // EXISTING: Conversation WebSocket (KEEP EXACTLY)
+            // EXISTING: Conversation WebSocket
             conversationWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
                 headers: {
                     'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -923,7 +921,7 @@ fastify.register(async (fastify) => {
         const initializeSession = () => {
             console.log('=== INITIALIZING CONVERSATION SESSION ===');
             console.log('Agent ID:', agentId);
-            console.log('User ID:', userId || 'global');
+            console.log('User ID:', userId);
             console.log('Using SYSTEM_MESSAGE:', agentConfig.systemMessage.substring(0, 100) + '...');
             
             const sessionUpdate = {
@@ -972,7 +970,7 @@ fastify.register(async (fastify) => {
             }
         };
 
-        // EXISTING: Send initial conversation item (KEEP EXACTLY)
+        // EXISTING: Send initial conversation item
         const sendInitialConversationItem = () => {
             const initialConversationItem = {
                 type: 'conversation.item.create',
@@ -993,7 +991,7 @@ fastify.register(async (fastify) => {
             }
         };
 
-        // EXISTING: Handle interruption (KEEP EXACTLY)
+        // EXISTING: Handle interruption
         const handleSpeechStartedEvent = () => {
             if (markQueue.length > 0 && responseStartTimestampTwilio != null) {
                 const elapsedTime = latestMediaTimestamp - responseStartTimestampTwilio;
@@ -1020,7 +1018,7 @@ fastify.register(async (fastify) => {
             }
         };
 
-        // EXISTING: Send mark messages (KEEP EXACTLY)
+        // EXISTING: Send mark messages
         const sendMark = (connection, streamSid) => {
             if (streamSid && connection.readyState === WebSocket.OPEN) {
                 const markEvent = {
@@ -1033,7 +1031,7 @@ fastify.register(async (fastify) => {
             }
         };
 
-        // EXISTING: Conversation WebSocket handlers (KEEP EXACTLY)
+        // EXISTING: Conversation WebSocket handlers
         conversationWs.on('open', () => {
             console.log('Connected to OpenAI Conversation API');
             setTimeout(initializeSession, 100);
@@ -1152,10 +1150,10 @@ fastify.register(async (fastify) => {
                         streamSid = data.start.streamSid;
                         callId = generateCallId();
                         
-                        console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, User: ${userId || 'global'}`);
+                        console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, User: ${userId}`);
                         
                         // MODIFIED: Create call record with user context
-                        createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId);
+                        createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId !== 'global' ? userId : null);
                         
                         responseStartTimestampTwilio = null;
                         latestMediaTimestamp = 0;
@@ -1178,7 +1176,7 @@ fastify.register(async (fastify) => {
 
         // ENHANCED: Handle connection close with transcript finalization
         connection.on('close', () => {
-            console.log(`Client disconnected from media stream (user: ${userId || 'global'})`);
+            console.log(`Client disconnected from media stream (user: ${userId})`);
             
             // Finalize call record
             if (callId) {
@@ -1189,7 +1187,7 @@ fastify.register(async (fastify) => {
                     hasTranscript: transcriptCount > 0
                 });
                 
-                console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries (user: ${userId || 'global'})`);
+                console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries (user: ${userId})`);
             }
             
             activeConnections.delete(connectionData);
@@ -1226,7 +1224,7 @@ fastify.register(async (fastify) => {
     });
 });
 
-// EXISTING: Graceful shutdown, error handler, and server start (KEEP EXACTLY)
+// EXISTING: Graceful shutdown, error handler, and server start
 const gracefulShutdown = (signal) => {
     console.log(`Received ${signal}. Shutting down gracefully...`);
     fastify.close(() => {
