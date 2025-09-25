@@ -618,6 +618,49 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
     }
 });
 
+// NEW: Speaking order endpoint specifically for Lovable
+fastify.post('/api/update-speaking-order', async (request, reply) => {
+    try {
+        const userId = request.headers['x-user-id'] || request.body.userId;
+        const { speakingOrder, agentId = 'default' } = request.body;
+        
+        console.log(`🔄 Updating speaking order for userId: ${userId}, agentId: ${agentId}, speakingOrder: ${speakingOrder}`);
+        
+        if (!userId) {
+            return reply.status(400).send({ error: 'User ID is required' });
+        }
+
+        if (!speakingOrder || !['agent', 'caller', 'ai', 'user'].includes(speakingOrder)) {
+            return reply.status(400).send({ error: 'Invalid speaking order. Must be "agent" or "caller"' });
+        }
+
+        // Convert Lovable's format to your internal format
+        const speaksFirstValue = (speakingOrder === 'agent' || speakingOrder === 'ai') ? 'ai' : 'caller';
+        
+        // Update the user's agent configuration
+        const updatedAgent = updateUserAgent(userId, agentId, {
+            speaksFirst: speaksFirstValue
+        });
+        
+        console.log(`✅ Speaking order updated: User ${userId}, Agent ${agentId}, SpeaksFirst: ${speaksFirstValue}`);
+        
+        reply.send({ 
+            success: true, 
+            message: 'Speaking order updated successfully',
+            userId,
+            agentId,
+            speaksFirst: updatedAgent.speaksFirst,
+            speakingOrder: speakingOrder
+        });
+    } catch (error) {
+        console.error('Error updating speaking order:', error);
+        reply.status(500).send({ 
+            error: 'Failed to update speaking order', 
+            details: error.message 
+        });
+    }
+});
+
 // NEW: Dashboard API Routes (user-aware)
 
 // Get user's agents
@@ -1238,6 +1281,7 @@ const start = async () => {
         console.log('✅ Multi-user support: ACTIVE');
         console.log('✅ User data isolation: ACTIVE');
         console.log('✅ Lovable sync endpoint: ACTIVE');
+        console.log('✅ Speaking order endpoint: ACTIVE');
         console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
     } catch (err) {
         console.error('Failed to start server:', err);
