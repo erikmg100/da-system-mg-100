@@ -926,6 +926,7 @@ fastify.register(async (fastify) => {
         let responseStartTimestampTwilio = null;
         let conversationWs = null;
         let transcriptionWs = null;
+        let silenceTimer = null; // ADD THIS LINE
 
         // Create connection data object
         const connectionData = { connection, conversationWs: null, transcriptionWs: null, agentId };
@@ -1169,25 +1170,50 @@ fastify.register(async (fastify) => {
                 const data = JSON.parse(message);
                 switch (data.event) {
                     case 'media':
-                        latestMediaTimestamp = data.media.timestamp;
-                        
-                        // Send audio to BOTH conversation AND transcription
-                        if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
-                            const audioAppend = {
-                                type: 'input_audio_buffer.append',
-                                audio: data.media.payload
-                            };
-                            conversationWs.send(JSON.stringify(audioAppend));
-                        }
+    latestMediaTimestamp = data.media.timestamp;
+    
+    // SILENCE DETECTION: Track audio activity
+    if (silenceTimer) {
+        clearTimeout(silenceTimer);
+    }
+    
+    // Set new silence timer (6 seconds)
+    silenceTimer = setTimeout(() => {
+        if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+            const reminderItem = {
+                type: 'conversation.item.create',
+                item: {
+                    type: 'message',
+                    role: 'user',
+                    content: [{
+                        type: 'input_text',
+                        text: 'SILENCE_REMINDER: The caller has been silent for 6 seconds. Gently encourage them to continue or ask if they need help.'
+                    }]
+                }
+            };
+            conversationWs.send(JSON.stringify(reminderItem));
+            conversationWs.send(JSON.stringify({ type: 'response.create' }));
+            console.log('🔕 Sent silence reminder after 6 seconds of inactivity');
+        }
+    }, 6000); // 6 seconds
+    
+    // Send audio to BOTH conversation AND transcription
+    if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+        const audioAppend = {
+            type: 'input_audio_buffer.append',
+            audio: data.media.payload
+        };
+        conversationWs.send(JSON.stringify(audioAppend));
+    }
 
-                        if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
-                            const audioAppend = {
-                                type: 'input_audio_buffer.append',
-                                audio: data.media.payload
-                            };
-                            transcriptionWs.send(JSON.stringify(audioAppend));
-                        }
-                        break;
+    if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
+        const audioAppend = {
+            type: 'input_audio_buffer.append',
+            audio: data.media.payload
+        };
+        transcriptionWs.send(JSON.stringify(audioAppend));
+    }
+    break;
                         
                     case 'start':
                         streamSid = data.start.streamSid;
@@ -1220,6 +1246,11 @@ fastify.register(async (fastify) => {
         // ENHANCED: Handle connection close with transcript finalization
         connection.on('close', () => {
             console.log(`Client disconnected from media stream (user: ${userId || 'global'})`);
+
+            // ADD THIS: Clear silence timer
+            if (silenceTimer) {
+                clearTimeout(silenceTimer);
+            }
             
             // Finalize call record
             if (callId) {
