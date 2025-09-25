@@ -85,12 +85,19 @@ EMOTIONAL RESPONSES:
 - Surprised: Quick intake of breath, higher pitch
 - Thinking: Slower pace, thoughtful "hmm" sounds
 - Understanding: "Ah, I see what you mean", "That makes perfect sense"
-SILENCE HANDLING:
-- If you receive a "SILENCE_REMINDER" message, it means the caller hasn't spoken for 3 seconds
-- Gently encourage them with phrases like: "Are you still there?", "Take your time, I'm here to help", "Did you have a question?", or "Is there anything specific you'd like to know?"
-- Keep the tone warm and patient, not pushy
-- Don't mention the technical silence detection - just naturally check in with them
-- Use natural expressions like "Hmm, I'm here when you're ready" or "No rush at all!"
+SILENCE HANDLING - IMPORTANT:
+- You will occasionally receive a special system message that says "SILENCE_REMINDER" - this means the caller has not spoken for 3+ seconds
+- ONLY respond to silence when you receive this specific "SILENCE_REMINDER" message
+- Do NOT proactively check for silence on your own or mention waiting for responses
+- When you DO receive a "SILENCE_REMINDER", respond naturally with ONE of these approaches:
+  * "Are you still there?"
+  * "Take your time, I'm here when you're ready"
+  * "Did you want to ask me something?"
+  * "Is there anything specific I can help you with?"
+  * "I'm here if you need anything"
+- Keep it brief, warm, and natural - don't over-explain
+- Never mention "3 seconds" or technical details about silence detection
+- After checking in once, wait for them to respond - don't keep asking repeatedly
 Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
     speaksFirst: 'caller',
     greetingMessage: 'Hello there! How can I help you today?',
@@ -295,15 +302,15 @@ async function updateCallRecord(callId, updates) {
                 } catch (error) {
                     console.error(`Error updating call in Supabase (attempt ${attempt}):`, {
                         message: error.message,
-                        details: error.stack
+                        details: error.stack || 'No stack trace available'
                     });
                     if (attempt === maxRetries) {
                         console.error('Final Supabase update attempt failed');
-                        throw error;
+                        return CALL_RECORDS[callIndex]; // Return in-memory update to avoid crashing
                     }
                 }
                 attempt++;
-                await new Promise(resolve => setTimeout(resolve, 1000)); // 1-second delay between retries
+                await new Promise(resolve => setTimeout(resolve, 1000));
             }
         }
         return CALL_RECORDS[callIndex];
@@ -780,8 +787,7 @@ fastify.register(async (fastify) => {
         try {
             conversationWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
                 headers: {
-                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                    "OpenAI-Beta": "realtime=v1"
+                    'Authorization': `Bearer ${OPENAI_API_KEY}`
                 },
                 timeout: 30000
             });
@@ -818,9 +824,9 @@ fastify.register(async (fastify) => {
                             format: { type: 'audio/pcmu' },
                             turn_detection: {
                                 type: 'server_vad',
-                                threshold: 0.5,
-                                prefix_padding_ms: 400,
-                                silence_duration_ms: 1000
+                                threshold: 0.6,
+                                prefix_padding_ms: 300,
+                                silence_duration_ms: 800
                             }
                         },
                         output: { format: { type: 'audio/pcmu' }, voice: 'marin' },
@@ -829,7 +835,10 @@ fastify.register(async (fastify) => {
                 },
             };
             if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+                console.log('Sending session update:', JSON.stringify(sessionUpdate, null, 2));
                 conversationWs.send(JSON.stringify(sessionUpdate));
+            } else {
+                console.error('Conversation WebSocket not open for session update');
             }
         };
         const initializeTranscriptionSession = () => {
@@ -844,7 +853,10 @@ fastify.register(async (fastify) => {
                 }
             };
             if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
+                console.log('Sending transcription session update:', JSON.stringify(transcriptionSessionUpdate, null, 2));
                 transcriptionWs.send(JSON.stringify(transcriptionSessionUpdate));
+            } else {
+                console.error('Transcription WebSocket not open for session update');
             }
         };
         const sendInitialConversationItem = () => {
@@ -862,8 +874,11 @@ fastify.register(async (fastify) => {
                 }
             };
             if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+                console.log('Sending initial conversation item:', JSON.stringify(initialConversationItem, null, 2));
                 conversationWs.send(JSON.stringify(initialConversationItem));
                 conversationWs.send(JSON.stringify({ type: 'response.create' }));
+            } else {
+                console.error('Conversation WebSocket not open for initial conversation item');
             }
         };
         const handleSpeechStartedEvent = () => {
@@ -876,9 +891,11 @@ fastify.register(async (fastify) => {
                         content_index: 0,
                         audio_end_ms: elapsedTime
                     };
+                    console.log('Sending truncate event:', JSON.stringify(truncateEvent, null, 2));
                     conversationWs.send(JSON.stringify(truncateEvent));
                 }
                 if (connection.readyState === WebSocket.OPEN) {
+                    console.log('Sending clear event to Twilio');
                     connection.send(JSON.stringify({
                         event: 'clear',
                         streamSid: streamSid
@@ -896,22 +913,23 @@ fastify.register(async (fastify) => {
                     streamSid: streamSid,
                     mark: { name: 'responsePart' }
                 };
+                console.log('Sending mark event:', JSON.stringify(markEvent, null, 2));
                 connection.send(JSON.stringify(markEvent));
                 markQueue.push('responsePart');
             }
         };
         conversationWs.on('open', () => {
             console.log('Connected to OpenAI Conversation API');
-            setTimeout(initializeSession, 100);
+            setTimeout(initializeSession, 500);
             if (agentConfig.speaksFirst === 'ai') {
-                setTimeout(sendInitialConversationItem, 200);
+                setTimeout(sendInitialConversationItem, 600);
             }
         });
         conversationWs.on('message', (data) => {
             try {
                 const response = JSON.parse(data);
                 if (LOG_EVENT_TYPES.includes(response.type)) {
-                    console.log(`Conversation event: ${response.type}`, response);
+                    console.log(`Conversation event: ${response.type}`, JSON.stringify(response, null, 2));
                 }
                 if (response.type === 'response.done' && response.response.status === 'failed') {
                     console.log('=== CONVERSATION RESPONSE FAILURE ===');
@@ -925,6 +943,7 @@ fastify.register(async (fastify) => {
                             streamSid: streamSid,
                             media: { payload: response.delta }
                         };
+                        console.log('Sending audio delta to Twilio:', JSON.stringify(audioDelta, null, 2));
                         connection.send(JSON.stringify(audioDelta));
                         if (!responseStartTimestampTwilio) {
                             responseStartTimestampTwilio = latestMediaTimestamp;
@@ -960,6 +979,7 @@ fastify.register(async (fastify) => {
                                         }]
                                     }
                                 };
+                                console.log('Sending silence reminder:', JSON.stringify(reminderItem, null, 2));
                                 conversationWs.send(JSON.stringify(reminderItem));
                                 conversationWs.send(JSON.stringify({ type: 'response.create' }));
                                 silenceTimer = null;
@@ -973,12 +993,12 @@ fastify.register(async (fastify) => {
         });
         transcriptionWs.on('open', () => {
             console.log('Connected to OpenAI Transcription API');
-            setTimeout(initializeTranscriptionSession, 200);
+            setTimeout(initializeTranscriptionSession, 500);
         });
         transcriptionWs.on('message', (data) => {
             try {
                 const response = JSON.parse(data);
-                console.log(`📝 Transcription event: ${response.type}`);
+                console.log(`📝 Transcription event: ${response.type}`, JSON.stringify(response, null, 2));
                 if (response.type === 'conversation.item.input_audio_transcription.completed') {
                     const transcriptEntry = {
                         id: response.item_id,
@@ -1010,6 +1030,7 @@ fastify.register(async (fastify) => {
                                 type: 'input_audio_buffer.append',
                                 audio: data.media.payload
                             };
+                            console.log('Appending audio to conversation:', JSON.stringify(audioAppend, null, 2));
                             conversationWs.send(JSON.stringify(audioAppend));
                         }
                         if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
@@ -1017,6 +1038,7 @@ fastify.register(async (fastify) => {
                                 type: 'input_audio_buffer.append',
                                 audio: data.media.payload
                             };
+                            console.log('Appending audio to transcription:', JSON.stringify(audioAppend, null, 2));
                             transcriptionWs.send(JSON.stringify(audioAppend));
                         }
                         break;
@@ -1052,6 +1074,8 @@ fastify.register(async (fastify) => {
                     status: 'completed',
                     endTime: new Date().toISOString(),
                     hasTranscript: transcriptCount > 0
+                }).catch(error => {
+                    console.error('Failed to update call record on close:', error);
                 });
                 console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries (user: ${userId || 'global'})`);
             }
