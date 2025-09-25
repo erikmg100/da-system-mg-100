@@ -101,6 +101,13 @@ EMOTIONAL RESPONSES:
 - Thinking: Slower pace, thoughtful "hmm" sounds
 - Understanding: "Ah, I see what you mean", "That makes perfect sense"
 
+SILENCE HANDLING:
+- If you receive a "SILENCE_REMINDER" message, it means the caller hasn't spoken for 3 seconds
+- Gently encourage them with phrases like: "Are you still there?", "Take your time, I'm here to help", "Did you have a question?", or "Is there anything specific you'd like to know?"
+- Keep the tone warm and patient, not pushy
+- Don't mention the technical silence detection - just naturally check in with them
+- Use natural expressions like "Hmm, I'm here when you're ready" or "No rush at all!"
+
 Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
     speaksFirst: 'caller',
     greetingMessage: 'Hello there! How can I help you today?',
@@ -1119,40 +1126,40 @@ fastify.register(async (fastify) => {
                     }
                 }
 
-               if (response.type === 'input_audio_buffer.speech_started') {
-    // Clear silence timer when speech starts
-    if (silenceTimer) {
-        clearTimeout(silenceTimer);
-        silenceTimer = null;
-    }
-    handleSpeechStartedEvent();
-}
-
-if (response.type === 'input_audio_buffer.speech_stopped') {
-    // Start silence timer when speech stops
-    if (silenceTimer) {
-        clearTimeout(silenceTimer);
-    }
-    
-    silenceTimer = setTimeout(() => {
-        if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
-            const reminderItem = {
-                type: 'conversation.item.create',
-                item: {
-                    type: 'message',
-                    role: 'user',
-                    content: [{
-                        type: 'input_text',
-                        text: 'SILENCE_REMINDER: The caller has been silent for 6 seconds. Gently encourage them to continue or ask if they need help.'
-                    }]
+                if (response.type === 'input_audio_buffer.speech_started') {
+                    // Clear silence timer when speech starts
+                    if (silenceTimer) {
+                        clearTimeout(silenceTimer);
+                        silenceTimer = null;
+                    }
+                    handleSpeechStartedEvent();
                 }
-            };
-            conversationWs.send(JSON.stringify(reminderItem));
-            conversationWs.send(JSON.stringify({ type: 'response.create' }));
-            console.log('🔕 Sent silence reminder after 6 seconds of speech inactivity');
-        }
-    }, 6000); // 6 seconds after speech stops
-}
+
+                if (response.type === 'input_audio_buffer.speech_stopped') {
+                    // Start silence timer when speech stops
+                    if (silenceTimer) {
+                        clearTimeout(silenceTimer);
+                    }
+                    
+                    silenceTimer = setTimeout(() => {
+                        if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+                            const reminderItem = {
+                                type: 'conversation.item.create',
+                                item: {
+                                    type: 'message',
+                                    role: 'user',
+                                    content: [{
+                                        type: 'input_text',
+                                        text: 'SILENCE_REMINDER: The caller has been silent for 3 seconds. Gently encourage them to continue or ask if they need help.'
+                                    }]
+                                }
+                            };
+                            conversationWs.send(JSON.stringify(reminderItem));
+                            conversationWs.send(JSON.stringify({ type: 'response.create' }));
+                            console.log('🔕 Sent silence reminder after 3 seconds of speech inactivity');
+                        }
+                    }, 3000); // CHANGED: 3 seconds after speech stops
+                }
             } catch (error) {
                 console.error('Error processing conversation message:', error);
             }
@@ -1201,25 +1208,25 @@ if (response.type === 'input_audio_buffer.speech_stopped') {
                 const data = JSON.parse(message);
                 switch (data.event) {
                     case 'media':
-    latestMediaTimestamp = data.media.timestamp;
-    
-    // Send audio to BOTH conversation AND transcription
-    if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
-        const audioAppend = {
-            type: 'input_audio_buffer.append',
-            audio: data.media.payload
-        };
-        conversationWs.send(JSON.stringify(audioAppend));
-    }
+                        latestMediaTimestamp = data.media.timestamp;
+                        
+                        // Send audio to BOTH conversation AND transcription
+                        if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+                            const audioAppend = {
+                                type: 'input_audio_buffer.append',
+                                audio: data.media.payload
+                            };
+                            conversationWs.send(JSON.stringify(audioAppend));
+                        }
 
-    if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
-        const audioAppend = {
-            type: 'input_audio_buffer.append',
-            audio: data.media.payload
-        };
-        transcriptionWs.send(JSON.stringify(audioAppend));
-    }
-    break;
+                        if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
+                            const audioAppend = {
+                                type: 'input_audio_buffer.append',
+                                audio: data.media.payload
+                            };
+                            transcriptionWs.send(JSON.stringify(audioAppend));
+                        }
+                        break;
                         
                     case 'start':
                         streamSid = data.start.streamSid;
