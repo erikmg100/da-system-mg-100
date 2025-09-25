@@ -89,7 +89,7 @@ SILENCE HANDLING - IMPORTANT:
 - You will occasionally receive a special system message that says "SILENCE_REMINDER" - this means the caller has not spoken for 3+ seconds
 - ONLY respond to silence when you receive this specific "SILENCE_REMINDER" message
 - Do NOT proactively check for silence on your own or mention waiting for responses
-- When you DO receive a "SILENCE_REMINDER", respond naturally with ONE of these approaches:
+- When you DO receive a "SILENCE_REMINDER", respond naturally with ONE of these exact phrases:
   * "Are you still there?"
   * "Take your time, I'm here when you're ready"
   * "Did you want to ask me something?"
@@ -305,8 +305,8 @@ async function updateCallRecord(callId, updates) {
                         details: error.stack || 'No stack trace available'
                     });
                     if (attempt === maxRetries) {
-                        console.error('Final Supabase update attempt failed');
-                        return CALL_RECORDS[callIndex]; // Return in-memory update to avoid crashing
+                        console.warn('Final Supabase update attempt failed, falling back to in-memory update');
+                        return CALL_RECORDS[callIndex];
                     }
                 }
                 attempt++;
@@ -353,6 +353,17 @@ fastify.get('/health', async (request, reply) => {
         totalUsers: Object.keys(USER_DATABASE).length,
         totalAgents: Object.values(USER_DATABASE).reduce((acc, user) => acc + Object.keys(user.agents).length, 0)
     });
+});
+
+fastify.get('/api/test-supabase', async (request, reply) => {
+    try {
+        const { data, error } = await supabase.from('call_activities').select('*').limit(1);
+        if (error) throw error;
+        reply.send({ success: true, data });
+    } catch (error) {
+        console.error('Supabase test error:', error);
+        reply.status(500).send({ error: 'Supabase test failed', details: error.message });
+    }
 });
 
 fastify.get('/api/phone-numbers', async (request, reply) => {
@@ -477,6 +488,7 @@ fastify.get('/api/current-prompt/:agentId?', { preHandler: [requireUser] }, asyn
     const config = getUserAgent(userId, agentId);
     console.log(`=== GETTING PROMPT FOR USER ${userId} AGENT ${agentId} ===`);
     console.log('Prompt:', config.systemMessage.substring(0, 100) + '...');
+    console.log('Speaks First:', config.speaksFirst);
     console.log('=====================================================');
     reply.send({
         userId,
@@ -773,6 +785,7 @@ fastify.register(async (fastify) => {
         console.log(`Client connected for agent: ${agentId} (user: ${userId || 'global'})`);
         console.log(`Using agent: ${agentConfig.name}`);
         console.log(`System prompt: ${agentConfig.systemMessage.substring(0, 100)}...`);
+        console.log(`Speaks First: ${agentConfig.speaksFirst}`);
         console.log(`============================`);
         let streamSid = null;
         let callId = null;
@@ -824,9 +837,9 @@ fastify.register(async (fastify) => {
                             format: { type: 'audio/pcmu' },
                             turn_detection: {
                                 type: 'server_vad',
-                                threshold: 0.6,
+                                threshold: 0.5,
                                 prefix_padding_ms: 300,
-                                silence_duration_ms: 800
+                                silence_duration_ms: 700
                             }
                         },
                         output: { format: { type: 'audio/pcmu' }, voice: 'marin' },
@@ -920,9 +933,10 @@ fastify.register(async (fastify) => {
         };
         conversationWs.on('open', () => {
             console.log('Connected to OpenAI Conversation API');
-            setTimeout(initializeSession, 500);
+            setTimeout(initializeSession, 1000);
             if (agentConfig.speaksFirst === 'ai') {
-                setTimeout(sendInitialConversationItem, 600);
+                console.log(`Agent configured to speak first: ${agentConfig.speaksFirst}`);
+                setTimeout(sendInitialConversationItem, 1200);
             }
         });
         conversationWs.on('message', (data) => {
@@ -975,7 +989,7 @@ fastify.register(async (fastify) => {
                                         role: 'user',
                                         content: [{
                                             type: 'input_text',
-                                            text: 'SILENCE_REMINDER: The caller has been silent for 3 seconds. Gently encourage them to continue or ask if they need help.'
+                                            text: 'SILENCE_REMINDER: Respond with one of these exact phrases: "Are you still there?", "Take your time, I\'m here when you\'re ready", "Did you want to ask me something?", "Is there anything specific I can help you with?", "I\'m here if you need anything"'
                                         }]
                                     }
                                 };
@@ -993,7 +1007,7 @@ fastify.register(async (fastify) => {
         });
         transcriptionWs.on('open', () => {
             console.log('Connected to OpenAI Transcription API');
-            setTimeout(initializeTranscriptionSession, 500);
+            setTimeout(initializeTranscriptionSession, 1000);
         });
         transcriptionWs.on('message', (data) => {
             try {
