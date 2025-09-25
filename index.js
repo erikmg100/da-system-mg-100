@@ -1119,9 +1119,40 @@ fastify.register(async (fastify) => {
                     }
                 }
 
-                if (response.type === 'input_audio_buffer.speech_started') {
-                    handleSpeechStartedEvent();
+               if (response.type === 'input_audio_buffer.speech_started') {
+    // Clear silence timer when speech starts
+    if (silenceTimer) {
+        clearTimeout(silenceTimer);
+        silenceTimer = null;
+    }
+    handleSpeechStartedEvent();
+}
+
+if (response.type === 'input_audio_buffer.speech_stopped') {
+    // Start silence timer when speech stops
+    if (silenceTimer) {
+        clearTimeout(silenceTimer);
+    }
+    
+    silenceTimer = setTimeout(() => {
+        if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+            const reminderItem = {
+                type: 'conversation.item.create',
+                item: {
+                    type: 'message',
+                    role: 'user',
+                    content: [{
+                        type: 'input_text',
+                        text: 'SILENCE_REMINDER: The caller has been silent for 6 seconds. Gently encourage them to continue or ask if they need help.'
+                    }]
                 }
+            };
+            conversationWs.send(JSON.stringify(reminderItem));
+            conversationWs.send(JSON.stringify({ type: 'response.create' }));
+            console.log('🔕 Sent silence reminder after 6 seconds of speech inactivity');
+        }
+    }, 6000); // 6 seconds after speech stops
+}
             } catch (error) {
                 console.error('Error processing conversation message:', error);
             }
@@ -1171,31 +1202,6 @@ fastify.register(async (fastify) => {
                 switch (data.event) {
                     case 'media':
     latestMediaTimestamp = data.media.timestamp;
-    
-    // SILENCE DETECTION: Track audio activity
-    if (silenceTimer) {
-        clearTimeout(silenceTimer);
-    }
-    
-    // Set new silence timer (6 seconds)
-    silenceTimer = setTimeout(() => {
-        if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
-            const reminderItem = {
-                type: 'conversation.item.create',
-                item: {
-                    type: 'message',
-                    role: 'user',
-                    content: [{
-                        type: 'input_text',
-                        text: 'SILENCE_REMINDER: The caller has been silent for 6 seconds. Gently encourage them to continue or ask if they need help.'
-                    }]
-                }
-            };
-            conversationWs.send(JSON.stringify(reminderItem));
-            conversationWs.send(JSON.stringify({ type: 'response.create' }));
-            console.log('🔕 Sent silence reminder after 6 seconds of inactivity');
-        }
-    }, 6000); // 6 seconds
     
     // Send audio to BOTH conversation AND transcription
     if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
