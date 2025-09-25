@@ -618,24 +618,32 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
     }
 });
 
-// NEW: Speaking order endpoint specifically for Lovable
+// FIXED: Speaking order endpoint specifically for Lovable
 fastify.post('/api/update-speaking-order', async (request, reply) => {
     try {
+        // Add explicit CORS headers to the response
+        reply.header('Access-Control-Allow-Origin', '*');
+        reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-user-id');
+        
         const userId = request.headers['x-user-id'] || request.body.userId;
         const { speakingOrder, agentId = 'default' } = request.body;
         
         console.log(`🔄 Updating speaking order for userId: ${userId}, agentId: ${agentId}, speakingOrder: ${speakingOrder}`);
+        console.log('Full request body:', JSON.stringify(request.body, null, 2));
         
         if (!userId) {
             return reply.status(400).send({ error: 'User ID is required' });
         }
 
-        if (!speakingOrder || !['agent', 'caller', 'ai', 'user'].includes(speakingOrder)) {
-            return reply.status(400).send({ error: 'Invalid speaking order. Must be "agent" or "caller"' });
+        if (!speakingOrder || !['agent', 'caller', 'ai', 'user', 'assistant'].includes(speakingOrder)) {
+            return reply.status(400).send({ error: 'Invalid speaking order. Must be "agent", "assistant", or "caller"' });
         }
 
         // Convert Lovable's format to your internal format
-        const speaksFirstValue = (speakingOrder === 'agent' || speakingOrder === 'ai') ? 'ai' : 'caller';
+        // Lovable sends: "assistant" or "caller"
+        // Your system uses: "ai" or "caller"
+        const speaksFirstValue = (speakingOrder === 'agent' || speakingOrder === 'ai' || speakingOrder === 'assistant') ? 'ai' : 'caller';
         
         // Update the user's agent configuration
         const updatedAgent = updateUserAgent(userId, agentId, {
@@ -659,6 +667,14 @@ fastify.post('/api/update-speaking-order', async (request, reply) => {
             details: error.message 
         });
     }
+});
+
+// Add OPTIONS handler for CORS preflight requests
+fastify.options('/api/update-speaking-order', async (request, reply) => {
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-user-id');
+    reply.status(200).send();
 });
 
 // NEW: Dashboard API Routes (user-aware)
