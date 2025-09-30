@@ -988,56 +988,56 @@ function calculateDuration(startTime, endTime) {
 }
 fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     try {
-        const calledNumber = request.body.To; // Capture the called phone number
+        const calledNumber = request.body.To;
         let agentId = request.params.agentId || 'default';
         let userId = request.query.userId || null;
-      
-        // Query Supabase to find which agent owns the called number
+        
+        // Query database to find which agent owns this phone number
         if (supabase && calledNumber) {
-            const response = await fetch(
-                `${process.env.SUPABASE_URL}/rest/v1/chat_agents?phone_number=eq.${encodeURIComponent(calledNumber)}&select=id,user_id`,
-                {
-                    headers: {
-                        'apikey': process.env.SUPABASE_ANON_KEY,
-                        'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
-                    }
+            try {
+                const { data: agent, error } = await supabase
+                    .from('agent_prompts')
+                    .select('id, user_id')
+                    .eq('phone_number', calledNumber)
+                    .maybeSingle();
+                
+                if (!error && agent) {
+                    agentId = agent.id;
+                    userId = agent.user_id;
+                    console.log(`✅ Found agent for ${calledNumber}: Agent ${agentId}, User ${userId}`);
+                } else if (error) {
+                    console.error('Supabase query error:', error);
+                } else {
+                    console.log(`⚠️ No agent assigned to ${calledNumber}, using defaults`);
                 }
-            );
-            const agents = await response.json();
-            if (agents[0]?.id) {
-                agentId = agents[0].id; // Override agentId with the one from Supabase
-                userId = agents[0].user_id || userId; // Use user_id from Supabase if available
+            } catch (error) {
+                console.error('Error querying agent assignment:', error);
+                // Fall back to URL parameters
             }
         }
-      
-        console.log(`DEBUG: Incoming call - calledNumber=${calledNumber}, agentId=${agentId}, userId=${userId}, host=${request.headers.host}`);
-      
+        
+        console.log(`DEBUG: Incoming call - calledNumber=${calledNumber}, agentId=${agentId}, userId=${userId}`);
+        
         const config = getUserAgent(userId, agentId);
-      
+        
         console.log('=== INCOMING CALL WEBHOOK ===');
         console.log('Called Number:', calledNumber);
         console.log('Agent ID:', agentId);
         console.log('User ID:', userId || 'global');
-        console.log('Agent Config:', config ? 'Found' : 'Using fallback');
         console.log('Agent Name:', config.name);
-        console.log('Current prompt preview:', config.systemMessage.substring(0, 100) + '...');
-        console.log('Voice:', VOICE);
-        console.log('Speaks First:', config.speaksFirst);
         console.log('===============================');
-      
+        
         const websocketUrl = userId
             ? `wss://${request.headers.host}/media-stream/${agentId}/${userId}`
             : `wss://${request.headers.host}/media-stream/${agentId}`;
-      
-        console.log(`DEBUG: Generated WebSocket URL: ${websocketUrl}`);
-      
+        
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
     <Response>
         <Connect>
             <Stream url="${websocketUrl}" />
         </Connect>
     </Response>`;
-      
+        
         reply.type('text/xml').send(twimlResponse);
     } catch (error) {
         console.error('Error handling incoming call:', error);
@@ -1351,7 +1351,7 @@ fastify.register(async (fastify) => {
                                 } else {
                                     console.error('Failed to save contact:', result.error);
                                     functionOutput = {
-                                        success: false,
+                                        success:нах
                                         message: 'Contact info noted, will be saved manually'
                                     };
                                 }
