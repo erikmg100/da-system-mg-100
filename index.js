@@ -1366,6 +1366,8 @@ fastify.register(async (fastify) => {
                                             output: JSON.stringify(functionOutput)
                                         }
                                     }));
+                                    // Trigger immediate response to continue conversation
+                                    conversationWs.send(JSON.stringify({ type: 'response.create' }));
                                 }
                             } catch (error) {
                                 console.error('Error saving contact:', error);
@@ -1383,6 +1385,8 @@ fastify.register(async (fastify) => {
                                             })
                                         }
                                     }));
+                                    // Trigger immediate response to continue conversation
+                                    conversationWs.send(JSON.stringify({ type: 'response.create' }));
                                 }
                             }
                         })();
