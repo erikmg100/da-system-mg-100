@@ -5,13 +5,23 @@ import fastifyFormBody from '@fastify/formbody';
 import fastifyWs from '@fastify/websocket';
 import fastifyCors from '@fastify/cors';
 import { createClient } from '@supabase/supabase-js';
+import twilio from 'twilio';
 
 dotenv.config();
 
-const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY } = process.env;
+const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN } = process.env;
 if (!OPENAI_API_KEY) {
     console.error('Missing OpenAI API key. Please set it in the .env file.');
     process.exit(1);
+}
+
+// Initialize Twilio client for call termination
+let twilioClient = null;
+if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
+    twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+    console.log('✅ Twilio client initialized');
+} else {
+    console.warn('⚠️ Twilio credentials not found - call termination will not work');
 }
 
 let supabase = null;
@@ -88,6 +98,11 @@ EMOTIONAL RESPONSES:
 - Thinking: Slower pace, thoughtful "hmm" sounds
 - Understanding: "Ah, I see what you mean", "That makes perfect sense"
 
+CALL ENDING:
+- When the user says goodbye, thanks you and indicates they're done, or asks to hang up, use the end_call function
+- Before ending, provide a warm farewell message
+- Watch for phrases like: "goodbye", "bye", "hang up", "that's all", "I'm done", "end call"
+
 Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
     speaksFirst: 'caller',
     greetingMessage: 'Hello there! How can I help you today?',
@@ -106,6 +121,7 @@ let GLOBAL_AGENT_CONFIGS = {
 
 let CALL_RECORDS = [];
 let TRANSCRIPT_STORAGE = {};
+let ACTIVE_CALL_SIDS = {}; // Map callId to Twilio CallSid
 
 const VOICE = 'marin';
 const PORT = process.env.PORT || 3000;
@@ -121,10 +137,28 @@ const LOG_EVENT_TYPES = [
     'input_audio_buffer.speech_stopped',
     'input_audio_buffer.speech_started',
     'session.created',
-    'session.updated'
+    'session.updated',
+    'response.function_call_arguments.done'
 ];
 
 const SHOW_TIMING_MATH = process.env.SHOW_TIMING_MATH === 'true';
+
+// Function to end a Twilio call
+async function endTwilioCall(callSid, reason = 'completed') {
+    if (!twilioClient) {
+        console.error('Cannot end call - Twilio client not initialized');
+        return false;
+    }
+    
+    try {
+        await twilioClient.calls(callSid).update({ status: 'completed' });
+        console.log(`✅ Successfully ended call ${callSid}. Reason: ${reason}`);
+        return true;
+    } catch (error) {
+        console.error(`❌ Error ending call ${callSid}:`, error.message);
+        return false;
+    }
+}
 
 const initializeUser = (userId) => {
     if (!USER_DATABASE[userId]) {
@@ -211,7 +245,6 @@ function calculateConfidence(logprobs) {
     return Math.exp(avgLogprob);
 }
 
-// NEW: Create or update contact in Supabase
 async function createOrUpdateContact(userId, phoneNumber, callId, metadata = {}) {
     if (!supabase || !userId) return null;
     
@@ -302,7 +335,6 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
         GLOBAL_AGENT_CONFIGS[agentId].todayCalls++;
     }
     
-    // NEW: Create or update contact
     if (userId && callerNumber && callerNumber !== 'Unknown') {
         await createOrUpdateContact(userId, callerNumber, callId);
     }
@@ -824,8 +856,6 @@ fastify.get('/api/dashboard/stats', { preHandler: [requireUser] }, async (reques
     });
 });
 
-// NEW: Contact Management Endpoints
-
 fastify.get('/api/contacts', { preHandler: [requireUser] }, async (request, reply) => {
     const userId = request.userId;
     const { search, limit = 50, offset = 0 } = request.query;
@@ -1050,6 +1080,7 @@ fastify.register(async (fastify) => {
 
         let streamSid = null;
         let callId = null;
+        let twilioCallSid = null;
         let latestMediaTimestamp = 0;
         let lastAssistantItem = null;
         let markQueue = [];
@@ -1111,7 +1142,25 @@ fastify.register(async (fastify) => {
                         },
                         output: { format: { type: 'audio/pcmu' }, voice: 'marin' },
                     },
-                    instructions: agentConfig.systemMessage
+                    instructions: agentConfig.systemMessage,
+                    tools: [
+                        {
+                            type: "function",
+                            name: "end_call",
+                            description: "Ends the current phone call. Use this when the user says goodbye, indicates they're done, or asks to hang up.",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    reason: {
+                                        type: "string",
+                                        description: "Brief reason for ending the call (e.g., 'user requested', 'conversation complete', 'goodbye')"
+                                    }
+                                },
+                                required: ["reason"]
+                            }
+                        }
+                    ],
+                    tool_choice: "auto"
                 },
             };
             
@@ -1218,6 +1267,49 @@ fastify.register(async (fastify) => {
                     console.log('====================================');
                 }
 
+                // Handle function call for end_call
+                if (response.type === 'response.function_call_arguments.done') {
+                    console.log('🔔 Function call detected:', response);
+                    
+                    if (response.name === 'end_call') {
+                        const args = JSON.parse(response.arguments);
+                        console.log(`📞 END_CALL function triggered. Reason: ${args.reason}`);
+                        
+                        // Send function output back to OpenAI
+                        if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+                            conversationWs.send(JSON.stringify({
+                                type: 'conversation.item.create',
+                                item: {
+                                    type: 'function_call_output',
+                                    call_id: response.call_id,
+                                    output: JSON.stringify({ 
+                                        success: true, 
+                                        message: 'Call will be terminated' 
+                                    })
+                                }
+                            }));
+                            
+                            // Trigger response to let AI say goodbye
+                            conversationWs.send(JSON.stringify({ type: 'response.create' }));
+                        }
+                        
+                        // End the Twilio call after a delay for farewell
+                        setTimeout(async () => {
+                            if (twilioCallSid) {
+                                console.log(`🔚 Ending Twilio call ${twilioCallSid}`);
+                                await endTwilioCall(twilioCallSid, args.reason);
+                            } else {
+                                console.warn('⚠️ No Twilio CallSid available to end call');
+                            }
+                            
+                            // Close the connection
+                            if (connection.readyState === WebSocket.OPEN) {
+                                connection.close();
+                            }
+                        }, 3000); // 3 second delay for farewell message
+                    }
+                }
+
                 if (response.type === 'response.output_audio.delta' && response.delta) {
                     if (connection.readyState === WebSocket.OPEN) {
                         const audioDelta = {
@@ -1310,8 +1402,12 @@ fastify.register(async (fastify) => {
                     case 'start':
                         streamSid = data.start.streamSid;
                         callId = generateCallId();
+                        twilioCallSid = data.start.callSid;
                         
-                        console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, User: ${userId || 'global'}`);
+                        // Store the mapping
+                        ACTIVE_CALL_SIDS[callId] = twilioCallSid;
+                        
+                        console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, Twilio SID: ${twilioCallSid}, User: ${userId || 'global'}`);
                         
                         createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId);
                         
@@ -1344,6 +1440,9 @@ fastify.register(async (fastify) => {
                     endTime: new Date().toISOString(),
                     hasTranscript: transcriptCount > 0
                 });
+                
+                // Clean up call SID mapping
+                delete ACTIVE_CALL_SIDS[callId];
                 
                 console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries (user: ${userId || 'global'})`);
             }
@@ -1411,7 +1510,9 @@ const start = async () => {
         console.log('✅ Lovable sync endpoint: ACTIVE');
         console.log('✅ Speaking order endpoint: ACTIVE');
         console.log('✅ Contact management: ACTIVE');
+        console.log('✅ End call function: ACTIVE');
         console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
+        console.log('✅ Twilio client:', twilioClient ? 'ACTIVE' : 'DISABLED (missing credentials)');
     } catch (err) {
         console.error('Failed to start server:', err);
         process.exit(1);
