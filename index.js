@@ -53,23 +53,45 @@ const fastify = Fastify({
 fastify.register(fastifyFormBody);
 fastify.register(fastifyWs);
 
+// FIXED CORS CONFIGURATION
 fastify.register(fastifyCors, { 
     origin: (origin, callback) => {
-        if (!origin) return callback(null, true);
-        
-        if (origin.includes('lovable.dev') || 
-            origin.includes('lovable.app') ||
-            origin.includes('lovableproject.com') ||
-            origin.includes('localhost')) {
+        // Allow requests with no origin (like mobile apps, curl, Postman)
+        if (!origin) {
+            console.log('CORS: Allowing request with no origin');
             return callback(null, true);
         }
         
-        console.log('CORS rejected origin:', origin);
+        // List of allowed domain patterns
+        const allowedPatterns = [
+            'lovable.dev',
+            'lovable.app',
+            'lovableproject.com',
+            'localhost',
+            '127.0.0.1'
+        ];
+        
+        // Check if origin matches any allowed pattern
+        const isAllowed = allowedPatterns.some(pattern => {
+            const matches = origin.includes(pattern);
+            if (matches) {
+                console.log(`CORS: Allowing origin ${origin} (matches ${pattern})`);
+            }
+            return matches;
+        });
+        
+        if (isAllowed) {
+            return callback(null, true);
+        }
+        
+        console.log(`CORS: Rejecting origin ${origin}`);
         return callback(new Error('Not allowed by CORS'), false);
     },
-    methods: ['GET', 'PUT', 'POST', 'OPTIONS', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-user-id'],
-    credentials: true
+    methods: ['GET', 'PUT', 'POST', 'OPTIONS', 'DELETE', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-user-id', 'Accept'],
+    credentials: true,
+    preflightContinue: false,
+    optionsSuccessStatus: 204
 });
 
 let USER_DATABASE = {};
@@ -1511,6 +1533,7 @@ const start = async () => {
         console.log('✅ Speaking order endpoint: ACTIVE');
         console.log('✅ Contact management: ACTIVE');
         console.log('✅ End call function: ACTIVE');
+        console.log('✅ CORS configuration: FIXED');
         console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
         console.log('✅ Twilio client:', twilioClient ? 'ACTIVE' : 'DISABLED (missing credentials)');
     } catch (err) {
