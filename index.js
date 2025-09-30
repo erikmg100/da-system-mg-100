@@ -1004,7 +1004,7 @@ fastify.register(async (fastify) => {
                   lastName: { type: "string", description: "Caller's last name" },
                   phoneNumber: { type: "string", description: "Caller's phone number including country code" },
                   email: { type: "string", description: "Caller's email address" },
-                  callerType: { type: "string", description: "Type: 'new_client', 'existing_client', 'personal_injury', 'no_fault'" },
+                 callerType: { type: "string", description: "Type: 'new_client', 'existing_client', or 'other'" }
                   notes: { type: "string", description: "Brief case description or reason for calling" }
                 },
                 required: ["firstName", "lastName", "phoneNumber"]
