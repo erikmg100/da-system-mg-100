@@ -1143,27 +1143,36 @@ fastify.register(async (fastify) => {
           if (response.name === 'save_contact') {
             const args = JSON.parse(response.arguments);
             console.log(`📇 SAVE_CONTACT function triggered:`, args);
-            // Handle the save_contact function call
+            // Handle the save_contact function call with direct HTTP POST
             (async () => {
               try {
-                const { data: contact, error: createError } = await supabase
-                  .functions.invoke('create-contact', {
-                    body: {
+                const fetchResponse = await fetch(
+                  'https://mxavpgblepptefeuodvg.supabase.co/functions/v1/create-contact',
+                  {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im14YXZwZ2JsZXBwdGVmZXVvZHZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMjE0ODYsImV4cCI6MjA3Mzc5NzQ4Nn0.ZttgxbiJr0DK-Cr-E99reFPwWhX5CtnNu7BIeykOAEo'
+                    },
+                    body: JSON.stringify({
+                      agentId: agentId,
                       firstName: args.firstName,
                       lastName: args.lastName,
                       phoneNumber: args.phoneNumber,
                       email: args.email || null,
-                      callerType: args.callerType || 'new_client',
-                      callId: callId,
+                      tags: ['voice-call'],
                       notes: args.notes || null,
-                      userId: userId,
-                      agentId: agentId
-                    }
-                  });
+                      callId: callId,
+                      userId: userId
+                    })
+                  }
+                );
 
+                const result = await fetchResponse.json();
+                
                 let functionOutput;
-                if (createError) {
-                  console.error('Failed to save contact:', createError);
+                if (!fetchResponse.ok) {
+                  console.error('Failed to save contact:', result);
                   functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
                 } else {
                   console.log(`✅ Contact saved: ${args.firstName} ${args.lastName}`);
@@ -1376,7 +1385,7 @@ const start = async () => {
     console.log('✅ Speaking order endpoint: ACTIVE');
     console.log('✅ Contact management: ACTIVE');
     console.log('✅ End call function: ACTIVE');
-    console.log('✅ Save contact function: ACTIVE');
+    console.log('✅ Save contact function: ACTIVE (Direct HTTP)');
     console.log('✅ CORS configuration: FIXED');
     console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
     console.log('✅ Twilio client:', twilioClient ? 'ACTIVE' : 'DISABLED (missing credentials)');
