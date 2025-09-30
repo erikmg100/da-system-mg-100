@@ -1353,6 +1353,7 @@ fastify.register(async (fastify) => {
                                     method: 'POST',
                                     headers: {
                                         'Content-Type': 'application/json',
+                                        'Authorization': 'Bearer ca2046e9-00bf-43bd-945c-6b7f3926683e'
                                     },
                                     body: JSON.stringify({
                                         firstName: args.firstName,
@@ -1360,7 +1361,6 @@ fastify.register(async (fastify) => {
                                         phoneNumber: args.phoneNumber,
                                         email: args.email || null,
                                         callerType: args.callerType || 'new_client',
-                                        agentId: agentId,
                                         callId: callId,
                                         notes: args.notes || null,
                                         userId: userId
