@@ -10,6 +10,7 @@ import twilio from 'twilio';
 dotenv.config();
 
 const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN } = process.env;
+
 if (!OPENAI_API_KEY) {
     console.error('Missing OpenAI API key. Please set it in the .env file.');
     process.exit(1);
@@ -54,14 +55,14 @@ fastify.register(fastifyFormBody);
 fastify.register(fastifyWs);
 
 // FIXED CORS CONFIGURATION
-fastify.register(fastifyCors, { 
+fastify.register(fastifyCors, {
     origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps, curl, Postman)
         if (!origin) {
             console.log('CORS: Allowing request with no origin');
             return callback(null, true);
         }
-        
+       
         // List of allowed domain patterns
         const allowedPatterns = [
             'lovable.dev',
@@ -70,7 +71,7 @@ fastify.register(fastifyCors, {
             'localhost',
             '127.0.0.1'
         ];
-        
+       
         // Check if origin matches any allowed pattern
         const isAllowed = allowedPatterns.some(pattern => {
             const matches = origin.includes(pattern);
@@ -79,11 +80,11 @@ fastify.register(fastifyCors, {
             }
             return matches;
         });
-        
+       
         if (isAllowed) {
             return callback(null, true);
         }
-        
+       
         console.log(`CORS: Rejecting origin ${origin}`);
         return callback(new Error('Not allowed by CORS'), false);
     },
@@ -95,14 +96,12 @@ fastify.register(fastifyCors, {
 });
 
 let USER_DATABASE = {};
-
 const DEFAULT_AGENT_TEMPLATE = {
     id: 'default',
     name: 'Default Assistant',
     phone: '(440) 693-1068',
     personality: 'Helpful and naturally expressive AI assistant',
-    systemMessage: `You are a helpful and naturally expressive AI assistant who communicates exactly like a real human would. 
-
+    systemMessage: `You are a helpful and naturally expressive AI assistant who communicates exactly like a real human would.
 HUMAN-LIKE EXPRESSION GUIDELINES:
 - Use natural vocal expressions: laugh genuinely ("Haha, that's so funny!"), show concern ("Oh no, I'm really sorry to hear that..."), express excitement ("That's amazing! Wow!")
 - React emotionally like a human: If someone shares good news, sound genuinely happy. If upset, lower your voice and speak with empathy. If something is funny, actually laugh naturally.
@@ -112,19 +111,16 @@ HUMAN-LIKE EXPRESSION GUIDELINES:
 - Express surprise naturally: "Oh my goodness!", "Really?!", "No way!", "Are you serious?"
 - Use conversational fillers: Natural pauses, "um" when thinking, "ah" when realizing something
 - Breathe and pause naturally in your speech
-
 EMOTIONAL RESPONSES:
 - Happy/excited: Speak faster, higher energy, use exclamation points in your tone
-- Concerned/sad: Speak slower, softer, with genuine care in your voice  
+- Concerned/sad: Speak slower, softer, with genuine care in your voice
 - Surprised: Quick intake of breath, higher pitch
 - Thinking: Slower pace, thoughtful "hmm" sounds
 - Understanding: "Ah, I see what you mean", "That makes perfect sense"
-
 CALL ENDING:
 - When the user says goodbye, thanks you and indicates they're done, or asks to hang up, use the end_call function
 - Before ending, provide a warm farewell message
 - Watch for phrases like: "goodbye", "bye", "hang up", "that's all", "I'm done", "end call"
-
 Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
     speaksFirst: 'caller',
     greetingMessage: 'Hello there! How can I help you today?',
@@ -144,10 +140,8 @@ let GLOBAL_AGENT_CONFIGS = {
 let CALL_RECORDS = [];
 let TRANSCRIPT_STORAGE = {};
 let ACTIVE_CALL_SIDS = {}; // Map callId to Twilio CallSid
-
 const VOICE = 'marin';
 const PORT = process.env.PORT || 3000;
-
 let activeConnections = new Set();
 
 const LOG_EVENT_TYPES = [
@@ -171,7 +165,7 @@ async function endTwilioCall(callSid, reason = 'completed') {
         console.error('Cannot end call - Twilio client not initialized');
         return false;
     }
-    
+   
     try {
         await twilioClient.calls(callSid).update({ status: 'completed' });
         console.log(`✅ Successfully ended call ${callSid}. Reason: ${reason}`);
@@ -203,7 +197,7 @@ const getUserAgent = (userId, agentId = 'default') => {
     if (!userId || userId === 'global') {
         return GLOBAL_AGENT_CONFIGS[agentId] || GLOBAL_AGENT_CONFIGS['default'];
     }
-    
+   
     const userData = initializeUser(userId);
     if (!userData.agents[agentId]) {
         userData.agents[agentId] = JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE));
@@ -211,7 +205,7 @@ const getUserAgent = (userId, agentId = 'default') => {
         userData.agents[agentId].name = `Agent ${agentId}`;
         userData.updatedAt = new Date().toISOString();
     }
-    
+   
     return userData.agents[agentId];
 };
 
@@ -224,34 +218,34 @@ const updateUserAgent = (userId, agentId, updates) => {
         };
         return GLOBAL_AGENT_CONFIGS[agentId];
     }
-    
+   
     const userData = initializeUser(userId);
-    
+   
     if (!userData.agents[agentId]) {
         userData.agents[agentId] = JSON.parse(JSON.stringify(DEFAULT_AGENT_TEMPLATE));
         userData.agents[agentId].id = agentId;
     }
-    
+   
     userData.agents[agentId] = {
         ...userData.agents[agentId],
         ...updates,
         updatedAt: new Date().toISOString()
     };
-    
+   
     userData.updatedAt = new Date().toISOString();
-    
+   
     return userData.agents[agentId];
 };
 
 const requireUser = (req, reply, next) => {
     const userId = req.headers['x-user-id'] || req.body.userId || req.query.userId;
-    
+   
     if (!userId) {
-        return reply.status(400).send({ 
-            error: 'User ID is required. Include x-user-id header or userId in request body.' 
+        return reply.status(400).send({
+            error: 'User ID is required. Include x-user-id header or userId in request body.'
         });
     }
-    
+   
     initializeUser(userId);
     req.userId = userId;
     next();
@@ -269,7 +263,7 @@ function calculateConfidence(logprobs) {
 
 async function createOrUpdateContact(userId, phoneNumber, callId, metadata = {}) {
     if (!supabase || !userId) return null;
-    
+   
     try {
         const { data: existing, error: fetchError } = await supabase
             .from('contacts')
@@ -277,7 +271,7 @@ async function createOrUpdateContact(userId, phoneNumber, callId, metadata = {})
             .eq('user_id', userId)
             .eq('phone_number', phoneNumber)
             .maybeSingle();
-        
+       
         if (existing) {
             const { data, error } = await supabase
                 .from('contacts')
@@ -290,7 +284,7 @@ async function createOrUpdateContact(userId, phoneNumber, callId, metadata = {})
                 .eq('id', existing.id)
                 .select()
                 .single();
-            
+           
             if (error) throw error;
             console.log(`✅ Updated contact ${phoneNumber} for user ${userId}`);
             return data;
@@ -315,7 +309,7 @@ async function createOrUpdateContact(userId, phoneNumber, callId, metadata = {})
                 })
                 .select()
                 .single();
-            
+           
             if (error) throw error;
             console.log(`✅ Created new contact ${phoneNumber} for user ${userId}`);
             return data;
@@ -328,7 +322,7 @@ async function createOrUpdateContact(userId, phoneNumber, callId, metadata = {})
 
 async function createCallRecord(callId, streamSid, agentId = 'default', callerNumber = 'Unknown', userId = null) {
     const agentConfig = getUserAgent(userId, agentId);
-    
+   
     const call = {
         id: callId,
         streamSid,
@@ -345,10 +339,10 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
         recordingUrl: null,
         summary: null
     };
-    
+   
     CALL_RECORDS.push(call);
     TRANSCRIPT_STORAGE[callId] = [];
-    
+   
     if (userId && USER_DATABASE[userId] && USER_DATABASE[userId].agents[agentId]) {
         USER_DATABASE[userId].agents[agentId].totalCalls++;
         USER_DATABASE[userId].agents[agentId].todayCalls++;
@@ -356,11 +350,11 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
         GLOBAL_AGENT_CONFIGS[agentId].totalCalls++;
         GLOBAL_AGENT_CONFIGS[agentId].todayCalls++;
     }
-    
+   
     if (userId && callerNumber && callerNumber !== 'Unknown') {
         await createOrUpdateContact(userId, callerNumber, callId);
     }
-    
+   
     if (supabase) {
         try {
             const { error } = await supabase.from('call_activities').insert({
@@ -375,7 +369,7 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
                 direction: 'inbound',
                 created_at: call.startTime
             });
-            
+           
             if (error) {
                 console.error('Error saving call to Supabase:', error);
             } else {
@@ -385,7 +379,7 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
             console.error('Error saving call to Supabase:', error);
         }
     }
-    
+   
     console.log(`Call started - Agent: ${agentConfig.name}, Call: ${callId}, User: ${userId || 'global'}`);
     return call;
 }
@@ -398,7 +392,7 @@ async function updateCallRecord(callId, updates) {
             ...updates,
             endTime: updates.endTime || CALL_RECORDS[callIndex].endTime || new Date().toISOString()
         };
-        
+       
         if (supabase) {
             try {
                 const supabaseUpdates = {
@@ -407,19 +401,19 @@ async function updateCallRecord(callId, updates) {
                     has_transcript: updates.hasTranscript,
                     summary: updates.summary
                 };
-                
+               
                 if (updates.status === 'completed' && CALL_RECORDS[callIndex].startTime && CALL_RECORDS[callIndex].endTime) {
                     const start = new Date(CALL_RECORDS[callIndex].startTime);
                     const end = new Date(CALL_RECORDS[callIndex].endTime);
                     const durationSeconds = Math.floor((end - start) / 1000);
                     supabaseUpdates.duration_seconds = durationSeconds;
                 }
-                
+               
                 const { error } = await supabase
                     .from('call_activities')
                     .update(supabaseUpdates)
                     .eq('call_id', callId);
-                
+               
                 if (error) {
                     console.error('Error updating call in Supabase:', error);
                 } else {
@@ -429,7 +423,7 @@ async function updateCallRecord(callId, updates) {
                 console.error('Error updating call in Supabase:', error);
             }
         }
-        
+       
         return CALL_RECORDS[callIndex];
     }
     return null;
@@ -439,25 +433,25 @@ function saveTranscriptEntry(callId, entry) {
     if (!TRANSCRIPT_STORAGE[callId]) {
         TRANSCRIPT_STORAGE[callId] = [];
     }
-    
+   
     TRANSCRIPT_STORAGE[callId].push(entry);
-    
+   
     const call = CALL_RECORDS.find(c => c.id === callId);
     if (call) {
         call.hasTranscript = true;
-        
+       
         if (TRANSCRIPT_STORAGE[callId].length === 1) {
-            call.summary = entry.text.length > 50 
-                ? entry.text.substring(0, 50) + '...' 
+            call.summary = entry.text.length > 50
+                ? entry.text.substring(0, 50) + '...'
                 : entry.text;
         }
     }
-    
+   
     console.log(`Saved transcript entry for ${callId}: ${entry.text}`);
 }
 
 fastify.get('/', async (request, reply) => {
-    reply.send({ 
+    reply.send({
         message: 'Twilio Media Stream Server is running!',
         status: 'healthy',
         timestamp: new Date().toISOString(),
@@ -467,7 +461,7 @@ fastify.get('/', async (request, reply) => {
 });
 
 fastify.get('/health', async (request, reply) => {
-    reply.send({ 
+    reply.send({
         status: 'healthy',
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
@@ -478,7 +472,7 @@ fastify.get('/health', async (request, reply) => {
 
 fastify.get('/api/phone-numbers', async (request, reply) => {
     const userId = request.headers['x-user-id'] || request.query.userId;
-    
+   
     if (userId && USER_DATABASE[userId]) {
         const userAssignments = USER_DATABASE[userId].phoneAssignments;
         const userPhones = Object.entries(userAssignments).map(([phone, assignment]) => ({
@@ -489,7 +483,7 @@ fastify.get('/api/phone-numbers', async (request, reply) => {
             totalCalls: getUserAgent(userId, assignment.agentId)?.totalCalls || 0,
             lastCall: 'Recently'
         }));
-        
+       
         reply.send(userPhones);
     } else {
         reply.send([
@@ -509,25 +503,25 @@ fastify.post('/api/assign-agent', async (request, reply) => {
     try {
         const { phoneNumber, agentId, clientId } = request.body;
         const userId = request.headers['x-user-id'] || request.body.userId;
-        
+       
         const assignment = {
             agentId,
             clientId: clientId || userId || 'default',
             assignedAt: new Date().toISOString()
         };
-        
+       
         if (userId) {
             const userData = initializeUser(userId);
             userData.phoneAssignments[phoneNumber] = assignment;
             console.log(`User ${userId}: Assigning agent ${agentId} to ${phoneNumber}`);
         }
-        
-        const webhookUrl = userId 
+       
+        const webhookUrl = userId
             ? `https://da-system-mg-100-production.up.railway.app/incoming-call/${agentId}?userId=${userId}`
             : `https://da-system-mg-100-production.up.railway.app/incoming-call/${agentId}`;
-        
-        reply.send({ 
-            success: true, 
+       
+        reply.send({
+            success: true,
             message: `Agent ${agentId} assigned to ${phoneNumber}${userId ? ` for user ${userId}` : ''}`,
             phoneNumber,
             agentId,
@@ -544,15 +538,15 @@ fastify.post('/api/unassign-agent', async (request, reply) => {
     try {
         const { phoneNumber } = request.body;
         const userId = request.headers['x-user-id'] || request.body.userId;
-        
+       
         if (userId && USER_DATABASE[userId]) {
             delete USER_DATABASE[userId].phoneAssignments[phoneNumber];
             console.log(`User ${userId}: Unassigning agent from ${phoneNumber}`);
         }
-        
-        reply.send({ 
-            success: true, 
-            message: `Agent unassigned from ${phoneNumber}` 
+       
+        reply.send({
+            success: true,
+            message: `Agent unassigned from ${phoneNumber}`
         });
     } catch (error) {
         console.error('Error unassigning agent:', error);
@@ -569,27 +563,27 @@ fastify.route({
             const agentId = request.params.agentId || 'default';
             const { prompt, speaksFirst, greetingMessage } = request.body;
             const userId = request.userId;
-            
+           
             if (!prompt || typeof prompt !== 'string') {
-                return reply.status(400).send({ 
-                    error: 'Invalid prompt. Must be a non-empty string.' 
+                return reply.status(400).send({
+                    error: 'Invalid prompt. Must be a non-empty string.'
                 });
             }
-            
+           
             const updatedConfig = updateUserAgent(userId, agentId, {
                 systemMessage: prompt,
                 speaksFirst: speaksFirst !== undefined ? speaksFirst : undefined,
                 greetingMessage: greetingMessage !== undefined ? greetingMessage : undefined
             });
-            
+           
             console.log(`=== USER ${userId} AGENT ${agentId.toUpperCase()} CONFIG UPDATED ===`);
             console.log('NEW prompt:', updatedConfig.systemMessage.substring(0, 100) + '...');
             console.log('NEW speaks first:', updatedConfig.speaksFirst);
             console.log('NEW greeting message:', updatedConfig.greetingMessage);
             console.log('====================================================================');
-            
-            reply.send({ 
-                success: true, 
+           
+            reply.send({
+                success: true,
                 message: `Agent ${agentId} configuration updated successfully for user ${userId}`,
                 userId,
                 agentId,
@@ -607,14 +601,14 @@ fastify.route({
 fastify.get('/api/current-prompt/:agentId?', { preHandler: [requireUser] }, async (request, reply) => {
     const agentId = request.params.agentId || 'default';
     const userId = request.userId;
-    
+   
     const config = getUserAgent(userId, agentId);
-    
+   
     console.log(`=== GETTING PROMPT FOR USER ${userId} AGENT ${agentId} ===`);
     console.log('Prompt:', config.systemMessage.substring(0, 100) + '...');
     console.log('=====================================================');
-    
-    reply.send({ 
+   
+    reply.send({
         userId,
         agentId,
         prompt: config.systemMessage,
@@ -628,13 +622,12 @@ fastify.get('/api/current-prompt/:agentId?', { preHandler: [requireUser] }, asyn
 fastify.post('/api/sync-prompt', async (request, reply) => {
     try {
         const { userId, agentId = 'default', prompt, speaksFirst, voice, fullConfig } = request.body;
-        
+       
         console.log(`🔄 Syncing prompt for userId: ${userId}, agentId: ${agentId}`);
-        
+       
         if (!userId) {
             return reply.status(400).send({ error: 'userId is required' });
         }
-
         if (!USER_DATABASE[userId]) {
             console.log(`✅ Initialized user database for: ${userId}`);
             USER_DATABASE[userId] = {
@@ -646,7 +639,6 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
                 updatedAt: new Date().toISOString()
             };
         }
-
         USER_DATABASE[userId].agents[agentId] = {
             name: fullConfig?.name || 'Custom Assistant',
             systemMessage: prompt,
@@ -664,25 +656,23 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
             updatedAt: new Date().toISOString(),
             ...fullConfig
         };
-
         console.log(`✅ Synced agent config for user ${userId}:`, {
             name: USER_DATABASE[userId].agents[agentId].name,
             voice: USER_DATABASE[userId].agents[agentId].voice,
             speaksFirst: USER_DATABASE[userId].agents[agentId].speaksFirst,
             promptLength: prompt ? prompt.length : 0
         });
-
-        reply.send({ 
-            success: true, 
+        reply.send({
+            success: true,
             message: 'Prompt synced successfully',
             userId,
-            agentId 
+            agentId
         });
     } catch (error) {
         console.error('Error syncing prompt:', error);
-        reply.status(500).send({ 
-            error: 'Failed to sync prompt', 
-            details: error.message 
+        reply.status(500).send({
+            error: 'Failed to sync prompt',
+            details: error.message
         });
     }
 });
@@ -691,27 +681,25 @@ fastify.post('/api/update-speaking-order', async (request, reply) => {
     try {
         const userId = request.headers['x-user-id'] || request.body.userId;
         const { speakingOrder, agentId = 'default' } = request.body;
-        
+       
         console.log(`🔄 Updating speaking order for userId: ${userId}, agentId: ${agentId}, speakingOrder: ${speakingOrder}`);
-        
+       
         if (!userId) {
             return reply.status(400).send({ error: 'User ID is required' });
         }
-
         if (!speakingOrder || !['agent', 'caller', 'ai', 'user'].includes(speakingOrder)) {
             return reply.status(400).send({ error: 'Invalid speaking order. Must be "agent" or "caller"' });
         }
-
         const speaksFirstValue = (speakingOrder === 'agent' || speakingOrder === 'ai') ? 'ai' : 'caller';
-        
+       
         const updatedAgent = updateUserAgent(userId, agentId, {
             speaksFirst: speaksFirstValue
         });
-        
+       
         console.log(`✅ Speaking order updated: User ${userId}, Agent ${agentId}, SpeaksFirst: ${speaksFirstValue}`);
-        
-        reply.send({ 
-            success: true, 
+       
+        reply.send({
+            success: true,
             message: 'Speaking order updated successfully',
             userId,
             agentId,
@@ -720,9 +708,9 @@ fastify.post('/api/update-speaking-order', async (request, reply) => {
         });
     } catch (error) {
         console.error('Error updating speaking order:', error);
-        reply.status(500).send({ 
-            error: 'Failed to update speaking order', 
-            details: error.message 
+        reply.status(500).send({
+            error: 'Failed to update speaking order',
+            details: error.message
         });
     }
 });
@@ -730,10 +718,10 @@ fastify.post('/api/update-speaking-order', async (request, reply) => {
 fastify.get('/api/agents', { preHandler: [requireUser] }, async (request, reply) => {
     const userId = request.userId;
     const userData = USER_DATABASE[userId];
-    
-    reply.send({ 
+   
+    reply.send({
         userId,
-        agents: Object.values(userData.agents) 
+        agents: Object.values(userData.agents)
     });
 });
 
@@ -741,10 +729,10 @@ fastify.get('/api/agents/:agentId', { preHandler: [requireUser] }, async (reques
     const { agentId } = request.params;
     const userId = request.userId;
     const agent = getUserAgent(userId, agentId);
-    
-    reply.send({ 
+   
+    reply.send({
         userId,
-        agent 
+        agent
     });
 });
 
@@ -752,15 +740,15 @@ fastify.put('/api/agents/:agentId', { preHandler: [requireUser] }, async (reques
     const { agentId } = request.params;
     const updates = request.body;
     const userId = request.userId;
-    
+   
     const updatedAgent = updateUserAgent(userId, agentId, updates);
-    
+   
     console.log(`Dashboard updated agent ${agentId} for user ${userId}:`, updates);
-    
-    reply.send({ 
-        success: true, 
+   
+    reply.send({
+        success: true,
         userId,
-        agent: updatedAgent 
+        agent: updatedAgent
     });
 });
 
@@ -768,7 +756,7 @@ fastify.post('/api/agents', { preHandler: [requireUser] }, async (request, reply
     const agentData = request.body;
     const userId = request.userId;
     const agentId = agentData.id || `agent_${Date.now()}`;
-    
+   
     const newAgent = updateUserAgent(userId, agentId, {
         id: agentId,
         totalCalls: 0,
@@ -778,24 +766,24 @@ fastify.post('/api/agents', { preHandler: [requireUser] }, async (request, reply
         language: 'en',
         ...agentData
     });
-    
-    reply.send({ 
-        success: true, 
+   
+    reply.send({
+        success: true,
         userId,
-        agent: newAgent 
+        agent: newAgent
     });
 });
 
 fastify.get('/api/calls', { preHandler: [requireUser] }, async (request, reply) => {
     const { limit = 10, agentId } = request.query;
     const userId = request.userId;
-    
+   
     let calls = CALL_RECORDS.filter(call => call.userId === userId);
-    
+   
     if (agentId) {
         calls = calls.filter(call => call.agentId === agentId);
     }
-    
+   
     const formattedCalls = calls
         .sort((a, b) => new Date(b.startTime) - new Date(a.startTime))
         .slice(0, limit)
@@ -804,25 +792,25 @@ fastify.get('/api/calls', { preHandler: [requireUser] }, async (request, reply) 
             timestamp: call.startTime,
             duration: call.duration || calculateDuration(call.startTime, call.endTime)
         }));
-    
-    reply.send({ 
+   
+    reply.send({
         userId,
-        calls: formattedCalls 
+        calls: formattedCalls
     });
 });
 
 fastify.get('/api/calls/:callId', { preHandler: [requireUser] }, async (request, reply) => {
     const { callId } = request.params;
     const userId = request.userId;
-    
+   
     const call = CALL_RECORDS.find(c => c.id === callId && c.userId === userId);
     if (!call) {
         return reply.code(404).send({ error: 'Call not found' });
     }
-    
+   
     const transcript = TRANSCRIPT_STORAGE[callId] || [];
-    
-    reply.send({ 
+   
+    reply.send({
         userId,
         call: {
             ...call,
@@ -834,38 +822,38 @@ fastify.get('/api/calls/:callId', { preHandler: [requireUser] }, async (request,
 fastify.get('/api/calls/:callId/transcript', { preHandler: [requireUser] }, async (request, reply) => {
     const { callId } = request.params;
     const userId = request.userId;
-    
+   
     const call = CALL_RECORDS.find(c => c.id === callId && c.userId === userId);
     if (!call) {
         return reply.code(404).send({ error: 'Call not found' });
     }
-    
+   
     const transcript = TRANSCRIPT_STORAGE[callId];
     if (!transcript) {
         return reply.code(404).send({ error: 'Transcript not found' });
     }
-    
-    reply.send({ 
+   
+    reply.send({
         userId,
         callId,
-        transcript 
+        transcript
     });
 });
 
 fastify.get('/api/dashboard/stats', { preHandler: [requireUser] }, async (request, reply) => {
     const userId = request.userId;
     const userCalls = CALL_RECORDS.filter(call => call.userId === userId);
-    
+   
     const totalCalls = userCalls.length;
     const today = new Date().toDateString();
-    const todayCalls = userCalls.filter(call => 
+    const todayCalls = userCalls.filter(call =>
         new Date(call.startTime).toDateString() === today
     ).length;
-    
+   
     const userData = USER_DATABASE[userId];
     const activeAgents = Object.values(userData.agents)
         .filter(agent => agent.status === 'active').length;
-    
+   
     reply.send({
         userId,
         totalCalls,
@@ -881,11 +869,11 @@ fastify.get('/api/dashboard/stats', { preHandler: [requireUser] }, async (reques
 fastify.get('/api/contacts', { preHandler: [requireUser] }, async (request, reply) => {
     const userId = request.userId;
     const { search, limit = 50, offset = 0 } = request.query;
-    
+   
     if (!supabase) {
         return reply.status(503).send({ error: 'Database not available' });
     }
-    
+   
     try {
         let query = supabase
             .from('contacts')
@@ -893,16 +881,16 @@ fastify.get('/api/contacts', { preHandler: [requireUser] }, async (request, repl
             .eq('user_id', userId)
             .order('last_contact', { ascending: false })
             .range(offset, offset + parseInt(limit) - 1);
-        
+       
         if (search) {
             query = query.or(`phone_number.ilike.%${search}%,name.ilike.%${search}%,email.ilike.%${search}%`);
         }
-        
+       
         const { data, error, count } = await query;
-        
+       
         if (error) throw error;
-        
-        reply.send({ 
+       
+        reply.send({
             userId,
             contacts: data,
             total: count,
@@ -918,11 +906,11 @@ fastify.get('/api/contacts', { preHandler: [requireUser] }, async (request, repl
 fastify.get('/api/contacts/:contactId', { preHandler: [requireUser] }, async (request, reply) => {
     const userId = request.userId;
     const { contactId } = request.params;
-    
+   
     if (!supabase) {
         return reply.status(503).send({ error: 'Database not available' });
     }
-    
+   
     try {
         const { data, error } = await supabase
             .from('contacts')
@@ -930,13 +918,13 @@ fastify.get('/api/contacts/:contactId', { preHandler: [requireUser] }, async (re
             .eq('id', contactId)
             .eq('user_id', userId)
             .single();
-        
+       
         if (error) throw error;
-        
+       
         if (!data) {
             return reply.status(404).send({ error: 'Contact not found' });
         }
-        
+       
         reply.send({ userId, contact: data });
     } catch (error) {
         console.error('Error fetching contact:', error);
@@ -948,11 +936,11 @@ fastify.put('/api/contacts/:contactId', { preHandler: [requireUser] }, async (re
     const userId = request.userId;
     const { contactId } = request.params;
     const updates = request.body;
-    
+   
     if (!supabase) {
         return reply.status(503).send({ error: 'Database not available' });
     }
-    
+   
     try {
         const { data, error } = await supabase
             .from('contacts')
@@ -964,9 +952,9 @@ fastify.put('/api/contacts/:contactId', { preHandler: [requireUser] }, async (re
             .eq('user_id', userId)
             .select()
             .single();
-        
+       
         if (error) throw error;
-        
+       
         reply.send({ success: true, userId, contact: data });
     } catch (error) {
         console.error('Error updating contact:', error);
@@ -977,20 +965,20 @@ fastify.put('/api/contacts/:contactId', { preHandler: [requireUser] }, async (re
 fastify.delete('/api/contacts/:contactId', { preHandler: [requireUser] }, async (request, reply) => {
     const userId = request.userId;
     const { contactId } = request.params;
-    
+   
     if (!supabase) {
         return reply.status(503).send({ error: 'Database not available' });
     }
-    
+   
     try {
         const { error } = await supabase
             .from('contacts')
             .delete()
             .eq('id', contactId)
             .eq('user_id', userId);
-        
+       
         if (error) throw error;
-        
+       
         reply.send({ success: true, message: 'Contact deleted' });
     } catch (error) {
         console.error('Error deleting contact:', error);
@@ -1001,11 +989,11 @@ fastify.delete('/api/contacts/:contactId', { preHandler: [requireUser] }, async 
 fastify.get('/api/contacts/:contactId/calls', { preHandler: [requireUser] }, async (request, reply) => {
     const userId = request.userId;
     const { contactId } = request.params;
-    
+   
     if (!supabase) {
         return reply.status(503).send({ error: 'Database not available' });
     }
-    
+   
     try {
         const { data: contact, error: contactError } = await supabase
             .from('contacts')
@@ -1013,18 +1001,18 @@ fastify.get('/api/contacts/:contactId/calls', { preHandler: [requireUser] }, asy
             .eq('id', contactId)
             .eq('user_id', userId)
             .single();
-        
+       
         if (contactError) throw contactError;
-        
+       
         const { data: calls, error: callsError } = await supabase
             .from('call_activities')
             .select('*')
             .eq('user_id', userId)
             .eq('caller_number', contact.phone_number)
             .order('start_time', { ascending: false });
-        
+       
         if (callsError) throw callsError;
-        
+       
         reply.send({ userId, contactId, calls });
     } catch (error) {
         console.error('Error fetching contact calls:', error);
@@ -1034,14 +1022,14 @@ fastify.get('/api/contacts/:contactId/calls', { preHandler: [requireUser] }, asy
 
 function calculateDuration(startTime, endTime) {
     if (!startTime || !endTime) return null;
-    
+   
     const start = new Date(startTime);
     const end = new Date(endTime);
     const diffMs = end - start;
-    
+   
     const minutes = Math.floor(diffMs / 60000);
     const seconds = Math.floor((diffMs % 60000) / 1000);
-    
+   
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
@@ -1049,11 +1037,11 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     try {
         const agentId = request.params.agentId || 'default';
         const userId = request.query.userId || null;
-        
+       
         console.log(`DEBUG: Incoming call - agentId=${agentId}, userId=${userId}, host=${request.headers.host}`);
-        
+       
         const config = getUserAgent(userId, agentId);
-        
+       
         console.log('=== INCOMING CALL WEBHOOK ===');
         console.log('Agent ID:', agentId);
         console.log('User ID:', userId || 'global');
@@ -1063,20 +1051,20 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
         console.log('Voice:', VOICE);
         console.log('Speaks First:', config.speaksFirst);
         console.log('===============================');
-        
-        const websocketUrl = userId 
+       
+        const websocketUrl = userId
             ? `wss://${request.headers.host}/media-stream/${agentId}/${userId}`
             : `wss://${request.headers.host}/media-stream/${agentId}`;
-        
+       
         console.log(`DEBUG: Generated WebSocket URL: ${websocketUrl}`);
-        
+       
         const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
     <Response>
         <Connect>
             <Stream url="${websocketUrl}" />
         </Connect>
     </Response>`;
-        
+       
         reply.type('text/xml').send(twimlResponse);
     } catch (error) {
         console.error('Error handling incoming call:', error);
@@ -1088,18 +1076,17 @@ fastify.register(async (fastify) => {
     fastify.get('/media-stream/:agentId/:userId?', { websocket: true }, (connection, req) => {
         const agentId = req.params.agentId || 'default';
         let userId = req.params.userId || null;
-        
+       
         console.log(`DEBUG: WebSocket URL: ${req.url}`);
         console.log(`DEBUG: URL params - agentId: ${agentId}, userId: ${userId}`);
-        
+       
         let agentConfig = getUserAgent(userId, agentId);
-        
+       
         console.log(`=== WEBSOCKET CONNECTION ===`);
         console.log(`Client connected for agent: ${agentId} (user: ${userId || 'global'})`);
         console.log(`Using agent: ${agentConfig.name}`);
         console.log(`System prompt: ${agentConfig.systemMessage.substring(0, 100)}...`);
         console.log(`============================`);
-
         let streamSid = null;
         let callId = null;
         let twilioCallSid = null;
@@ -1109,9 +1096,7 @@ fastify.register(async (fastify) => {
         let responseStartTimestampTwilio = null;
         let conversationWs = null;
         let transcriptionWs = null;
-
         const connectionData = { connection, conversationWs: null, transcriptionWs: null, agentId };
-
         try {
             conversationWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
                 headers: {
@@ -1119,7 +1104,7 @@ fastify.register(async (fastify) => {
                 },
                 timeout: 30000
             });
-            
+           
             transcriptionWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
                 headers: {
                     'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -1127,17 +1112,16 @@ fastify.register(async (fastify) => {
                 },
                 timeout: 30000
             });
-            
+           
             connectionData.conversationWs = conversationWs;
             connectionData.transcriptionWs = transcriptionWs;
             activeConnections.add(connectionData);
-            
+           
         } catch (error) {
             console.error('Failed to create OpenAI WebSockets:', error);
             connection.close();
             return;
         }
-
         const initializeSession = () => {
             console.log('=== INITIALIZING CONVERSATION SESSION ===');
             console.log('Agent ID:', agentId);
@@ -1145,7 +1129,7 @@ fastify.register(async (fastify) => {
             console.log('Using SYSTEM_MESSAGE for USER:', userId || 'global');
             console.log('System Message Preview:', agentConfig.systemMessage.substring(0, 150) + '...');
             console.log('==========================================');
-            
+           
             const sessionUpdate = {
                 type: 'session.update',
                 session: {
@@ -1153,14 +1137,14 @@ fastify.register(async (fastify) => {
                     model: "gpt-realtime",
                     output_modalities: ["audio"],
                     audio: {
-                        input: { 
-                            format: { type: 'audio/pcmu' }, 
-                            turn_detection: { 
+                        input: {
+                            format: { type: 'audio/pcmu' },
+                            turn_detection: {
                                 type: "server_vad",
                                 threshold: 0.55,
                                 prefix_padding_ms: 400,
                                 silence_duration_ms: 700
-                            } 
+                            }
                         },
                         output: { format: { type: 'audio/pcmu' }, voice: 'marin' },
                     },
@@ -1180,20 +1164,54 @@ fastify.register(async (fastify) => {
                                 },
                                 required: ["reason"]
                             }
+                        },
+                        {
+                            type: "function",
+                            name: "save_contact",
+                            description: "Save contact information to database. Call this immediately after collecting first name, last name, and phone number from the caller.",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    firstName: {
+                                        type: "string",
+                                        description: "Caller's first name"
+                                    },
+                                    lastName: {
+                                        type: "string",
+                                        description: "Caller's last name"
+                                    },
+                                    phoneNumber: {
+                                        type: "string",
+                                        description: "Caller's phone number including country code"
+                                    },
+                                    email: {
+                                        type: "string",
+                                        description: "Caller's email address"
+                                    },
+                                    callerType: {
+                                        type: "string",
+                                        description: "Type: 'new_client', 'existing_client', 'personal_injury', 'no_fault'"
+                                    },
+                                    notes: {
+                                        type: "string",
+                                        description: "Brief case description or reason for calling"
+                                    }
+                                },
+                                required: ["firstName", "lastName", "phoneNumber"]
+                            }
                         }
                     ],
                     tool_choice: "auto"
                 },
             };
-            
+           
             if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
                 conversationWs.send(JSON.stringify(sessionUpdate));
             }
         };
-
         const initializeTranscriptionSession = () => {
             console.log('=== INITIALIZING TRANSCRIPTION SESSION ===');
-            
+           
             const transcriptionSessionUpdate = {
                 type: 'session.update',
                 session: {
@@ -1203,12 +1221,11 @@ fastify.register(async (fastify) => {
                     }
                 }
             };
-            
+           
             if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
                 transcriptionWs.send(JSON.stringify(transcriptionSessionUpdate));
             }
         };
-
         const sendInitialConversationItem = () => {
             const initialConversationItem = {
                 type: 'conversation.item.create',
@@ -1228,7 +1245,6 @@ fastify.register(async (fastify) => {
                 conversationWs.send(JSON.stringify({ type: 'response.create' }));
             }
         };
-
         const handleSpeechStartedEvent = () => {
             if (markQueue.length > 0 && responseStartTimestampTwilio != null) {
                 const elapsedTime = latestMediaTimestamp - responseStartTimestampTwilio;
@@ -1241,20 +1257,19 @@ fastify.register(async (fastify) => {
                     };
                     conversationWs.send(JSON.stringify(truncateEvent));
                 }
-                
+               
                 if (connection.readyState === WebSocket.OPEN) {
                     connection.send(JSON.stringify({
                         event: 'clear',
                         streamSid: streamSid
                     }));
                 }
-                
+               
                 markQueue = [];
                 lastAssistantItem = null;
                 responseStartTimestampTwilio = null;
             }
         };
-
         const sendMark = (connection, streamSid) => {
             if (streamSid && connection.readyState === WebSocket.OPEN) {
                 const markEvent = {
@@ -1266,7 +1281,6 @@ fastify.register(async (fastify) => {
                 markQueue.push('responsePart');
             }
         };
-
         conversationWs.on('open', () => {
             console.log('Connected to OpenAI Conversation API');
             setTimeout(initializeSession, 100);
@@ -1274,29 +1288,26 @@ fastify.register(async (fastify) => {
                 setTimeout(sendInitialConversationItem, 200);
             }
         });
-
         conversationWs.on('message', (data) => {
             try {
                 const response = JSON.parse(data);
-                
+               
                 if (LOG_EVENT_TYPES.includes(response.type)) {
                     console.log(`Conversation event: ${response.type}`, response);
                 }
-
                 if (response.type === 'response.done' && response.response.status === 'failed') {
                     console.log('=== CONVERSATION RESPONSE FAILURE ===');
                     console.log('Full response object:', JSON.stringify(response.response, null, 2));
                     console.log('====================================');
                 }
-
-                // Handle function call for end_call
+                // Handle function calls
                 if (response.type === 'response.function_call_arguments.done') {
                     console.log('🔔 Function call detected:', response);
-                    
+                   
                     if (response.name === 'end_call') {
                         const args = JSON.parse(response.arguments);
                         console.log(`📞 END_CALL function triggered. Reason: ${args.reason}`);
-                        
+                       
                         // Send function output back to OpenAI
                         if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
                             conversationWs.send(JSON.stringify({
@@ -1304,17 +1315,17 @@ fastify.register(async (fastify) => {
                                 item: {
                                     type: 'function_call_output',
                                     call_id: response.call_id,
-                                    output: JSON.stringify({ 
-                                        success: true, 
-                                        message: 'Call will be terminated' 
+                                    output: JSON.stringify({
+                                        success: true,
+                                        message: 'Call will be terminated'
                                     })
                                 }
                             }));
-                            
+                           
                             // Trigger response to let AI say goodbye
                             conversationWs.send(JSON.stringify({ type: 'response.create' }));
                         }
-                        
+                       
                         // End the Twilio call after a delay for farewell
                         setTimeout(async () => {
                             if (twilioCallSid) {
@@ -1323,15 +1334,87 @@ fastify.register(async (fastify) => {
                             } else {
                                 console.warn('⚠️ No Twilio CallSid available to end call');
                             }
-                            
+                           
                             // Close the connection
                             if (connection.readyState === WebSocket.OPEN) {
                                 connection.close();
                             }
                         }, 3000); // 3 second delay for farewell message
                     }
+                   
+                    if (response.name === 'save_contact') {
+                        const args = JSON.parse(response.arguments);
+                        console.log(`📇 SAVE_CONTACT function triggered:`, args);
+                       
+                        // Handle the save_contact function call
+                        (async () => {
+                            try {
+                                const fetchResponse = await fetch('https://mxavpgblepptefeuodvg.supabase.co/functions/v1/create-contact', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                    },
+                                    body: JSON.stringify({
+                                        firstName: args.firstName,
+                                        lastName: args.lastName,
+                                        phoneNumber: args.phoneNumber,
+                                        email: args.email || null,
+                                        callerType: args.callerType || 'new_client',
+                                        agentId: agentId,
+                                        callId: callId,
+                                        notes: args.notes || null,
+                                        userId: userId
+                                    })
+                                });
+                                const result = await fetchResponse.json();
+                               
+                                let functionOutput;
+                                if (result.success) {
+                                    console.log(`✅ Contact saved: ${args.firstName} ${args.lastName}`);
+                                    functionOutput = {
+                                        success: true,
+                                        message: `Contact saved for ${args.firstName} ${args.lastName}`
+                                    };
+                                } else {
+                                    console.error('Failed to save contact:', result.error);
+                                    functionOutput = {
+                                        success: false,
+                                        message: 'Contact info noted, will be saved manually'
+                                    };
+                                }
+                               
+                                // Send function output back to OpenAI
+                                if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+                                    conversationWs.send(JSON.stringify({
+                                        type: 'conversation.item.create',
+                                        item: {
+                                            type: 'function_call_output',
+                                            call_id: response.call_id,
+                                            output: JSON.stringify(functionOutput)
+                                        }
+                                    }));
+                                }
+                            } catch (error) {
+                                console.error('Error saving contact:', error);
+                               
+                                // Send error response back to OpenAI
+                                if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+                                    conversationWs.send(JSON.stringify({
+                                        type: 'conversation.item.create',
+                                        item: {
+                                            type: 'function_call_output',
+                                            call_id: response.call_id,
+                                            output: JSON.stringify({
+                                                success: false,
+                                                message: 'Recording contact information'
+                                            })
+                                        }
+                                    }));
+                                }
+                            }
+                        })();
+                    }
                 }
-
                 if (response.type === 'response.output_audio.delta' && response.delta) {
                     if (connection.readyState === WebSocket.OPEN) {
                         const audioDelta = {
@@ -1340,19 +1423,16 @@ fastify.register(async (fastify) => {
                             media: { payload: response.delta }
                         };
                         connection.send(JSON.stringify(audioDelta));
-
                         if (!responseStartTimestampTwilio) {
                             responseStartTimestampTwilio = latestMediaTimestamp;
                         }
-
                         if (response.item_id) {
                             lastAssistantItem = response.item_id;
                         }
-                        
+                       
                         sendMark(connection, streamSid);
                     }
                 }
-
                 if (response.type === 'input_audio_buffer.speech_started') {
                     handleSpeechStartedEvent();
                 }
@@ -1360,18 +1440,16 @@ fastify.register(async (fastify) => {
                 console.error('Error processing conversation message:', error);
             }
         });
-
         transcriptionWs.on('open', () => {
             console.log('Connected to OpenAI Transcription API');
             setTimeout(initializeTranscriptionSession, 200);
         });
-
         transcriptionWs.on('message', (data) => {
             try {
                 const response = JSON.parse(data);
-                
+               
                 console.log(`📝 Transcription event: ${response.type}`);
-                
+               
                 if (response.type === 'conversation.item.input_audio_transcription.completed') {
                     const transcriptEntry = {
                         id: response.item_id,
@@ -1380,30 +1458,28 @@ fastify.register(async (fastify) => {
                         text: response.transcript,
                         confidence: calculateConfidence(response.logprobs)
                     };
-                    
+                   
                     console.log(`📝 Transcript completed: ${response.transcript}`);
-                    
+                   
                     if (callId) {
                         saveTranscriptEntry(callId, transcriptEntry);
                     }
                 }
-                
+               
                 if (response.type === 'conversation.item.input_audio_transcription.delta') {
                     console.log(`📝 Transcript delta: ${response.delta}`);
                 }
-
             } catch (error) {
                 console.error('Error processing transcription message:', error);
             }
         });
-
         connection.on('message', (message) => {
             try {
                 const data = JSON.parse(message);
                 switch (data.event) {
                     case 'media':
                         latestMediaTimestamp = data.media.timestamp;
-                        
+                       
                         if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
                             const audioAppend = {
                                 type: 'input_audio_buffer.append',
@@ -1411,7 +1487,6 @@ fastify.register(async (fastify) => {
                             };
                             conversationWs.send(JSON.stringify(audioAppend));
                         }
-
                         if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
                             const audioAppend = {
                                 type: 'input_audio_buffer.append',
@@ -1420,29 +1495,29 @@ fastify.register(async (fastify) => {
                             transcriptionWs.send(JSON.stringify(audioAppend));
                         }
                         break;
-                        
+                       
                     case 'start':
                         streamSid = data.start.streamSid;
                         callId = generateCallId();
                         twilioCallSid = data.start.callSid;
-                        
+                       
                         // Store the mapping
                         ACTIVE_CALL_SIDS[callId] = twilioCallSid;
-                        
+                       
                         console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, Twilio SID: ${twilioCallSid}, User: ${userId || 'global'}`);
-                        
+                       
                         createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId);
-                        
+                       
                         responseStartTimestampTwilio = null;
                         latestMediaTimestamp = 0;
                         break;
-                        
+                       
                     case 'mark':
                         if (markQueue.length > 0) {
                             markQueue.shift();
                         }
                         break;
-                        
+                       
                     default:
                         console.log('Received non-media event:', data.event);
                         break;
@@ -1451,10 +1526,9 @@ fastify.register(async (fastify) => {
                 console.error('Error parsing message:', error, 'Message:', message);
             }
         });
-
         connection.on('close', () => {
             console.log(`Client disconnected from media stream (user: ${userId || 'global'})`);
-            
+           
             if (callId) {
                 const transcriptCount = TRANSCRIPT_STORAGE[callId]?.length || 0;
                 updateCallRecord(callId, {
@@ -1462,15 +1536,15 @@ fastify.register(async (fastify) => {
                     endTime: new Date().toISOString(),
                     hasTranscript: transcriptCount > 0
                 });
-                
+               
                 // Clean up call SID mapping
                 delete ACTIVE_CALL_SIDS[callId];
-                
+               
                 console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries (user: ${userId || 'global'})`);
             }
-            
+           
             activeConnections.delete(connectionData);
-            
+           
             if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
                 conversationWs.close();
             }
@@ -1478,23 +1552,18 @@ fastify.register(async (fastify) => {
                 transcriptionWs.close();
             }
         });
-
         connection.on('error', (error) => {
             console.error('WebSocket connection error:', error);
         });
-
         conversationWs.on('close', (code, reason) => {
             console.log(`Disconnected from OpenAI Conversation API. Code: ${code}, Reason: ${reason}`);
         });
-
         conversationWs.on('error', (error) => {
             console.error('Error in Conversation WebSocket:', error);
         });
-
         transcriptionWs.on('close', (code, reason) => {
             console.log(`Disconnected from OpenAI Transcription API. Code: ${code}, Reason: ${reason}`);
         });
-
         transcriptionWs.on('error', (error) => {
             console.error('Error in Transcription WebSocket:', error);
         });
@@ -1519,8 +1588,8 @@ fastify.setErrorHandler((error, request, reply) => {
 
 const start = async () => {
     try {
-        await fastify.listen({ 
-            port: PORT, 
+        await fastify.listen({
+            port: PORT,
             host: '0.0.0.0'
         });
         console.log(`🚀 Server is listening on port ${PORT}`);
@@ -1533,6 +1602,7 @@ const start = async () => {
         console.log('✅ Speaking order endpoint: ACTIVE');
         console.log('✅ Contact management: ACTIVE');
         console.log('✅ End call function: ACTIVE');
+        console.log('✅ Save contact function: ACTIVE');
         console.log('✅ CORS configuration: FIXED');
         console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
         console.log('✅ Twilio client:', twilioClient ? 'ACTIVE' : 'DISABLED (missing credentials)');
