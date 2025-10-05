@@ -132,6 +132,28 @@ const LOG_EVENT_TYPES = [
 
 const SHOW_TIMING_MATH = process.env.SHOW_TIMING_MATH === 'true';
 
+// IMPROVED: Non-blocking Supabase operation wrapper
+async function safeSupabaseOperation(operation, operationName = 'Supabase operation') {
+  try {
+    if (!supabase) {
+      console.log(`⚠️ ${operationName}: Supabase not initialized, skipping`);
+      return { success: false, error: 'Supabase not initialized' };
+    }
+    
+    const result = await operation();
+    console.log(`✅ ${operationName}: Success`);
+    return { success: true, data: result };
+  } catch (error) {
+    // Log error but don't throw - this prevents call crashes
+    console.error(`❌ ${operationName} failed (non-blocking):`, {
+      message: error.message,
+      code: error.code || 'unknown',
+      hint: error.hint || 'none'
+    });
+    return { success: false, error: error.message };
+  }
+}
+
 // Function to end a Twilio call with improved error handling
 async function endTwilioCall(callSid, reason = 'completed') {
   if (!twilioClient || !callSid) {
@@ -222,64 +244,82 @@ function calculateConfidence(logprobs) {
   return Math.exp(avgLogprob);
 }
 
+// FIXED: Create/update contact with non-blocking error handling
 async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metadata = {}) {
-  if (!supabase || !userId) return null;
-  try {
-    const { data: existing, error: fetchError } = await supabase
-      .from('contacts')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('phone_number', phoneNumber)
-      .maybeSingle();
-    if (existing) {
-      const { data, error } = await supabase
-        .from('contacts')
-        .update({
-          last_call_id: callId,
-          last_contact: new Date().toISOString(),
-          total_calls: (existing.total_calls || 0) + 1,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', existing.id)
-        .select()
-        .single();
-      if (error) throw error;
-      console.log(`✅ Updated contact ${phoneNumber} for user ${userId}`);
-      return data;
-    } else {
-      const { data, error } = await supabase
-        .from('contacts')
-        .insert({
-          user_id: userId,
-          phone_number: phoneNumber,
-          first_call_id: callId,
-          last_call_id: callId,
-          first_contact: new Date().toISOString(),
-          last_contact: new Date().toISOString(),
-          total_calls: 1,
-          name: metadata.name || null,
-          email: metadata.email || null,
-          notes: metadata.notes || null,
-          tags: metadata.tags || [],
-          custom_fields: metadata.customFields || {},
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          agent_id: agentId
-        })
-        .select()
-        .single();
-      if (error) throw error;
-      console.log(`✅ Created new contact ${phoneNumber} for user ${userId}`);
-      return data;
-    }
-  } catch (error) {
-    console.error('Error creating/updating contact:', error);
+  if (!supabase || !userId) {
+    console.log('⚠️ Contact creation skipped: Supabase not available or no userId');
     return null;
   }
+
+  const result = await safeSupabaseOperation(
+    async () => {
+      // Check for existing contact
+      const { data: existing, error: fetchError } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('phone_number', phoneNumber)
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      if (existing) {
+        // Update existing contact
+        const { data, error } = await supabase
+          .from('contacts')
+          .update({
+            last_call_id: callId,
+            last_contact: new Date().toISOString(),
+            total_calls: (existing.total_calls || 0) + 1,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existing.id)
+          .select()
+          .single();
+
+        if (error) throw error;
+        console.log(`✅ Updated contact ${phoneNumber} for user ${userId}`);
+        return data;
+      } else {
+        // Create new contact
+        const { data, error } = await supabase
+          .from('contacts')
+          .insert({
+            user_id: userId,
+            phone_number: phoneNumber,
+            first_call_id: callId,
+            last_call_id: callId,
+            first_contact: new Date().toISOString(),
+            last_contact: new Date().toISOString(),
+            total_calls: 1,
+            name: metadata.name || null,
+            email: metadata.email || null,
+            notes: metadata.notes || null,
+            tags: metadata.tags || [],
+            custom_fields: metadata.customFields || {},
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            agent_id: agentId
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+        console.log(`✅ Created new contact ${phoneNumber} for user ${userId}`);
+        return data;
+      }
+    },
+    `Create/update contact ${phoneNumber}`
+  );
+
+  return result.success ? result.data : null;
 }
 
+// FIXED: Create call record with non-blocking database save
 async function createCallRecord(callId, streamSid, agentId = 'default', callerNumber = 'Unknown', userId = null) {
   const agentConfig = getUserAgent(userId, agentId);
+  
+  // Create in-memory record first (always succeeds)
   const call = {
     id: callId,
     streamSid,
@@ -296,8 +336,11 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
     recordingUrl: null,
     summary: null
   };
+  
   CALL_RECORDS.push(call);
   TRANSCRIPT_STORAGE[callId] = [];
+
+  // Update agent stats in memory
   if (userId && USER_DATABASE[userId] && USER_DATABASE[userId].agents[agentId]) {
     USER_DATABASE[userId].agents[agentId].totalCalls++;
     USER_DATABASE[userId].agents[agentId].todayCalls++;
@@ -305,53 +348,43 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
     GLOBAL_AGENT_CONFIGS[agentId].totalCalls++;
     GLOBAL_AGENT_CONFIGS[agentId].todayCalls++;
   }
+
+  // Create contact asynchronously (non-blocking)
   if (userId && callerNumber && callerNumber !== 'Unknown') {
-    await createOrUpdateContact(userId, callerNumber, callId, agentId);
+    createOrUpdateContact(userId, callerNumber, callId, agentId).catch(err => {
+      console.error(`Background contact creation failed: ${err.message}`);
+    });
   }
+
+  // Save to Supabase asynchronously (non-blocking)
   if (supabase) {
-    try {
-      const { error } = await supabase.from('call_activities').insert({
-        call_id: callId,
-        stream_sid: streamSid,
-        agent_id: agentId,
-        agent_name: agentConfig?.name || 'Unknown',
-        caller_number: callerNumber,
-        user_id: userId,
-        start_time: call.startTime,
-        status: 'in_progress',
-        direction: 'inbound',
-        created_at: call.startTime
-      });
-      if (error) {
-        console.error('Error saving call to Supabase:', error);
-      } else {
-        console.log(`✅ Call ${callId} saved to Supabase for user ${userId || 'global'}`);
-      }
-    } catch (error) {
-      console.error('Error saving call to Supabase:', error);
-    }
+    safeSupabaseOperation(
+      async () => {
+        const { error } = await supabase.from('call_activities').insert({
+          call_id: callId,
+          stream_sid: streamSid,
+          agent_id: agentId,
+          agent_name: agentConfig?.name || 'Unknown',
+          caller_number: callerNumber,
+          user_id: userId,
+          start_time: call.startTime,
+          status: 'in_progress',
+          direction: 'inbound',
+          created_at: call.startTime
+        });
+        if (error) throw error;
+      },
+      `Create call record ${callId}`
+    ).catch(err => {
+      console.error(`Background call creation failed: ${err.message}`);
+    });
   }
+
   console.log(`Call started - Agent: ${agentConfig.name}, Call: ${callId}, User: ${userId || 'global'}`);
   return call;
 }
 
-// Retry mechanism for Supabase updates
-async function retrySupabaseOperation(operation, maxRetries = 3, delayMs = 1000) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const result = await operation();
-      return result;
-    } catch (error) {
-      if (attempt === maxRetries) {
-        console.error(`Supabase operation failed after ${maxRetries} attempts:`, error);
-        throw error;
-      }
-      console.warn(`Supabase operation failed (attempt ${attempt}/${maxRetries}):`, error.message);
-      await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
-    }
-  }
-}
-
+// FIXED: Update call record without blocking or crashing
 async function updateCallRecord(callId, updates) {
   const callIndex = CALL_RECORDS.findIndex(call => call.id === callId);
   if (callIndex < 0) {
@@ -359,47 +392,47 @@ async function updateCallRecord(callId, updates) {
     return null;
   }
 
-  // Update in-memory call record
+  // Always update in-memory record first (this always succeeds)
   CALL_RECORDS[callIndex] = {
     ...CALL_RECORDS[callIndex],
     ...updates,
     endTime: updates.endTime || CALL_RECORDS[callIndex].endTime || new Date().toISOString()
   };
 
-  // Update in Supabase with retry logic
+  // Try to update Supabase asynchronously without blocking
   if (supabase) {
-    try {
-      const supabaseUpdates = {
-        status: updates.status,
-        end_time: CALL_RECORDS[callIndex].endTime,
-        has_transcript: updates.hasTranscript,
-        summary: updates.summary
-      };
-      if (updates.status === 'completed' && CALL_RECORDS[callIndex].startTime && CALL_RECORDS[callIndex].endTime) {
-        const start = new Date(CALL_RECORDS[callIndex].startTime);
-        const end = new Date(CALL_RECORDS[callIndex].endTime);
-        const durationSeconds = Math.floor((end - start) / 1000);
-        supabaseUpdates.duration_seconds = durationSeconds;
-      }
+    const supabaseUpdates = {
+      status: updates.status,
+      end_time: CALL_RECORDS[callIndex].endTime,
+      has_transcript: updates.hasTranscript,
+      summary: updates.summary
+    };
 
-      await retrySupabaseOperation(async () => {
+    // Calculate duration if call is completed
+    if (updates.status === 'completed' && CALL_RECORDS[callIndex].startTime && CALL_RECORDS[callIndex].endTime) {
+      const start = new Date(CALL_RECORDS[callIndex].startTime);
+      const end = new Date(CALL_RECORDS[callIndex].endTime);
+      const durationSeconds = Math.floor((end - start) / 1000);
+      supabaseUpdates.duration_seconds = durationSeconds;
+    }
+
+    // Fire and forget - don't await, don't block the call
+    safeSupabaseOperation(
+      async () => {
         const { error } = await supabase
           .from('call_activities')
           .update(supabaseUpdates)
           .eq('call_id', callId);
         if (error) throw error;
-        console.log(`✅ Call ${callId} updated in Supabase`);
-        return CALL_RECORDS[callIndex];
-      });
-    } catch (error) {
-      console.error('Error updating call in Supabase:', {
-        message: error.message,
-        details: error.stack || error.details || 'No additional details',
-        hint: error.hint || '',
-        code: error.code || ''
-      });
-    }
+      },
+      `Update call ${callId}`
+    ).catch(err => {
+      // Double safety: catch any unhandled errors
+      console.error(`Background update failed for call ${callId}:`, err.message);
+    });
   }
+
+  // Always return the updated in-memory record immediately
   return CALL_RECORDS[callIndex];
 }
 
@@ -1376,6 +1409,8 @@ const start = async () => {
     console.log('✅ CORS configuration: FIXED');
     console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
     console.log('✅ Twilio client:', twilioClient ? 'ACTIVE' : 'DISABLED (missing credentials)');
+    console.log('✅ Non-blocking database operations: ACTIVE');
+    console.log('✅ Call resilience improved: Database failures won\'t crash calls');
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);
