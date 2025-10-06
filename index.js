@@ -6,8 +6,10 @@ import fastifyWs from '@fastify/websocket';
 import fastifyCors from '@fastify/cors';
 import { createClient } from '@supabase/supabase-js';
 import twilio from 'twilio';
+import { promises as dns } from 'dns';
 
 dotenv.config();
+
 const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN } = process.env;
 
 if (!OPENAI_API_KEY) {
@@ -25,20 +27,36 @@ if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
     console.error('Failed to initialize Twilio client:', error);
   }
 } else {
-  console.warn('⚠️ Twilio credentials not found - call termination will not work');
+  console.warn('⚠️ Twilio credentials not found - call termination will not work. Please set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in Railway environment variables.');
 }
 
 let supabase = null;
 if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
   try {
-    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      fetch: (url, options) => {
+        console.log('Supabase fetch:', url, options);
+        return fetch(url, options).catch(err => {
+          console.error('Supabase fetch error:', err.message, err.stack);
+          throw err;
+        });
+      }
+    });
     console.log('✅ Supabase client initialized with service role key');
   } catch (error) {
     console.error('Failed to initialize Supabase:', error);
   }
 } else if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   try {
-    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      fetch: (url, options) => {
+        console.log('Supabase fetch:', url, options);
+        return fetch(url, options).catch(err => {
+          console.error('Supabase fetch error:', err.message, err.stack);
+          throw err;
+        });
+      }
+    });
     console.warn('⚠️ Supabase initialized with anon key - some operations may fail due to RLS policies');
   } catch (error) {
     console.error('Failed to initialize Supabase:', error);
@@ -89,6 +107,35 @@ fastify.register(fastifyCors, {
   optionsSuccessStatus: 204
 });
 
+// Health check endpoint for Supabase connectivity
+fastify.get('/health/supabase', async (request, reply) => {
+  if (!supabase) {
+    return reply.status(503).send({ error: 'Supabase not initialized' });
+  }
+  try {
+    const { data, error } = await supabase.from('contacts').select('*').limit(1);
+    if (error) {
+      console.error('Supabase health check failed:', error);
+      return reply.status(500).send({ error: 'Supabase connection failed', details: error.message, stack: error.stack });
+    }
+    reply.status(200).send({ status: 'Supabase connection successful', data });
+  } catch (err) {
+    console.error('Supabase health check exception:', err);
+    return reply.status(500).send({ error: 'Supabase connection failed', details: err.message, stack: err.stack });
+  }
+});
+
+// Health check endpoint for DNS resolution
+fastify.get('/health/dns', async (request, reply) => {
+  try {
+    const addresses = await dns.resolve('mxavpgblepptefeuodvg.supabase.co');
+    reply.status(200).send({ status: 'DNS resolution successful', addresses });
+  } catch (err) {
+    console.error('DNS resolution failed:', err);
+    return reply.status(500).send({ error: 'DNS resolution failed', details: err.message, stack: err.stack });
+  }
+});
+
 let USER_DATABASE = {};
 const DEFAULT_AGENT_TEMPLATE = {
   id: 'default',
@@ -114,9 +161,11 @@ let GLOBAL_AGENT_CONFIGS = {
 let CALL_RECORDS = [];
 let TRANSCRIPT_STORAGE = {};
 let ACTIVE_CALL_SIDS = {};
+
 const VOICE = 'marin';
 const PORT = process.env.PORT || 3000;
 let activeConnections = new Set();
+
 const LOG_EVENT_TYPES = [
   'error',
   'response.content.done',
@@ -132,23 +181,23 @@ const LOG_EVENT_TYPES = [
 
 const SHOW_TIMING_MATH = process.env.SHOW_TIMING_MATH === 'true';
 
-// IMPROVED: Non-blocking Supabase operation wrapper
+// IMPROVED: Non-blocking Supabase operation wrapper with detailed error logging
 async function safeSupabaseOperation(operation, operationName = 'Supabase operation') {
   try {
     if (!supabase) {
       console.log(`⚠️ ${operationName}: Supabase not initialized, skipping`);
       return { success: false, error: 'Supabase not initialized' };
     }
-    
+   
     const result = await operation();
     console.log(`✅ ${operationName}: Success`);
     return { success: true, data: result };
   } catch (error) {
-    // Log error but don't throw - this prevents call crashes
     console.error(`❌ ${operationName} failed (non-blocking):`, {
       message: error.message,
       code: error.code || 'unknown',
-      hint: error.hint || 'none'
+      hint: error.hint || 'none',
+      stack: error.stack || 'no stack trace'
     });
     return { success: false, error: error.message };
   }
@@ -244,13 +293,12 @@ function calculateConfidence(logprobs) {
   return Math.exp(avgLogprob);
 }
 
-// FIXED: Create/update contact with non-blocking error handling
+// FIXED: Create/update contact using Supabase client directly
 async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metadata = {}) {
   if (!supabase || !userId) {
     console.log('⚠️ Contact creation skipped: Supabase not available or no userId');
     return null;
   }
-
   const result = await safeSupabaseOperation(
     async () => {
       // Check for existing contact
@@ -260,9 +308,7 @@ async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metad
         .eq('user_id', userId)
         .eq('phone_number', phoneNumber)
         .maybeSingle();
-
       if (fetchError) throw fetchError;
-
       if (existing) {
         // Update existing contact
         const { data, error } = await supabase
@@ -271,12 +317,17 @@ async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metad
             last_call_id: callId,
             last_contact: new Date().toISOString(),
             total_calls: (existing.total_calls || 0) + 1,
-            updated_at: new Date().toISOString()
+            updated_at: new Date().toISOString(),
+            name: metadata.name || existing.name,
+            email: metadata.email || existing.email,
+            notes: metadata.notes || existing.notes,
+            tags: metadata.tags || existing.tags,
+            custom_fields: metadata.customFields || existing.custom_fields,
+            agent_id: agentId
           })
           .eq('id', existing.id)
           .select()
           .single();
-
         if (error) throw error;
         console.log(`✅ Updated contact ${phoneNumber} for user ${userId}`);
         return data;
@@ -295,7 +346,7 @@ async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metad
             name: metadata.name || null,
             email: metadata.email || null,
             notes: metadata.notes || null,
-            tags: metadata.tags || [],
+            tags: metadata.tags || ['voice-call'],
             custom_fields: metadata.customFields || {},
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
@@ -303,7 +354,6 @@ async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metad
           })
           .select()
           .single();
-
         if (error) throw error;
         console.log(`✅ Created new contact ${phoneNumber} for user ${userId}`);
         return data;
@@ -311,14 +361,13 @@ async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metad
     },
     `Create/update contact ${phoneNumber}`
   );
-
   return result.success ? result.data : null;
 }
 
 // FIXED: Create call record with non-blocking database save
 async function createCallRecord(callId, streamSid, agentId = 'default', callerNumber = 'Unknown', userId = null) {
   const agentConfig = getUserAgent(userId, agentId);
-  
+ 
   // Create in-memory record first (always succeeds)
   const call = {
     id: callId,
@@ -336,10 +385,9 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
     recordingUrl: null,
     summary: null
   };
-  
+ 
   CALL_RECORDS.push(call);
   TRANSCRIPT_STORAGE[callId] = [];
-
   // Update agent stats in memory
   if (userId && USER_DATABASE[userId] && USER_DATABASE[userId].agents[agentId]) {
     USER_DATABASE[userId].agents[agentId].totalCalls++;
@@ -348,14 +396,12 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
     GLOBAL_AGENT_CONFIGS[agentId].totalCalls++;
     GLOBAL_AGENT_CONFIGS[agentId].todayCalls++;
   }
-
   // Create contact asynchronously (non-blocking)
   if (userId && callerNumber && callerNumber !== 'Unknown') {
     createOrUpdateContact(userId, callerNumber, callId, agentId).catch(err => {
       console.error(`Background contact creation failed: ${err.message}`);
     });
   }
-
   // Save to Supabase asynchronously (non-blocking)
   if (supabase) {
     safeSupabaseOperation(
@@ -379,7 +425,6 @@ async function createCallRecord(callId, streamSid, agentId = 'default', callerNu
       console.error(`Background call creation failed: ${err.message}`);
     });
   }
-
   console.log(`Call started - Agent: ${agentConfig.name}, Call: ${callId}, User: ${userId || 'global'}`);
   return call;
 }
@@ -391,14 +436,12 @@ async function updateCallRecord(callId, updates) {
     console.warn(`Call ${callId} not found for update`);
     return null;
   }
-
   // Always update in-memory record first (this always succeeds)
   CALL_RECORDS[callIndex] = {
     ...CALL_RECORDS[callIndex],
     ...updates,
     endTime: updates.endTime || CALL_RECORDS[callIndex].endTime || new Date().toISOString()
   };
-
   // Try to update Supabase asynchronously without blocking
   if (supabase) {
     const supabaseUpdates = {
@@ -407,7 +450,6 @@ async function updateCallRecord(callId, updates) {
       has_transcript: updates.hasTranscript,
       summary: updates.summary
     };
-
     // Calculate duration if call is completed
     if (updates.status === 'completed' && CALL_RECORDS[callIndex].startTime && CALL_RECORDS[callIndex].endTime) {
       const start = new Date(CALL_RECORDS[callIndex].startTime);
@@ -415,7 +457,6 @@ async function updateCallRecord(callId, updates) {
       const durationSeconds = Math.floor((end - start) / 1000);
       supabaseUpdates.duration_seconds = durationSeconds;
     }
-
     // Fire and forget - don't await, don't block the call
     safeSupabaseOperation(
       async () => {
@@ -427,11 +468,9 @@ async function updateCallRecord(callId, updates) {
       },
       `Update call ${callId}`
     ).catch(err => {
-      // Double safety: catch any unhandled errors
       console.error(`Background update failed for call ${callId}:`, err.message);
     });
   }
-
   // Always return the updated in-memory record immediately
   return CALL_RECORDS[callIndex];
 }
@@ -978,14 +1017,72 @@ fastify.register(async (fastify) => {
     let responseStartTimestampTwilio = null;
     let conversationWs = null;
     let transcriptionWs = null;
+    let lastActivity = Date.now();
     const connectionData = { connection, conversationWs: null, transcriptionWs: null, agentId };
-    try {
-      conversationWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
+    
+    // Function to initialize or reinitialize conversation WebSocket
+    const initializeConversationWs = () => {
+      const ws = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
         headers: {
           'Authorization': `Bearer ${OPENAI_API_KEY}`,
         },
         timeout: 30000
       });
+      connectionData.conversationWs = ws;
+      return ws;
+    };
+
+    // Function to reconnect conversation WebSocket with preserved state
+    const reconnectConversationWs = (attempt = 1, maxAttempts = 3) => {
+      if (attempt > maxAttempts) {
+        console.error(`Failed to reconnect to OpenAI Conversation API after ${maxAttempts} attempts`);
+        if (connection.readyState === WebSocket.OPEN) {
+          connection.close();
+        }
+        return;
+      }
+      console.log(`Attempting to reconnect to OpenAI Conversation API (Attempt ${attempt}/${maxAttempts})`);
+      // Preserve call state
+      const savedState = {
+        markQueue: [...markQueue],
+        lastAssistantItem,
+        responseStartTimestampTwilio
+      };
+      if (conversationWs && conversationWs.readyState !== WebSocket.CLOSED) {
+        conversationWs.close();
+      }
+      conversationWs = initializeConversationWs();
+      connectionData.conversationWs = conversationWs;
+
+      // Restore call state
+      markQueue = savedState.markQueue;
+      lastAssistantItem = savedState.lastAssistantItem;
+      responseStartTimestampTwilio = savedState.responseStartTimestampTwilio;
+
+      conversationWs.on('open', () => {
+        console.log('Reconnected to OpenAI Conversation API');
+        setTimeout(initializeSession, 100);
+        if (agentConfig.speaksFirst === 'ai') {
+          setTimeout(sendInitialConversationItem, 200);
+        }
+      });
+
+      conversationWs.on('message', handleConversationMessage);
+
+      conversationWs.on('close', (code, reason) => {
+        console.log(`Disconnected from OpenAI Conversation API. Code: ${code}, Reason: ${reason}`);
+        if (code !== 1000 && connection.readyState === WebSocket.OPEN) {
+          setTimeout(() => reconnectConversationWs(attempt + 1, maxAttempts), 5000);
+        }
+      });
+
+      conversationWs.on('error', (error) => {
+        console.error('Error in Conversation WebSocket:', error);
+      });
+    };
+
+    try {
+      conversationWs = initializeConversationWs();
       transcriptionWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
         headers: {
           'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -1001,6 +1098,21 @@ fastify.register(async (fastify) => {
       connection.close();
       return;
     }
+
+    // Add connection health monitoring with active pings
+    const keepAliveInterval = setInterval(() => {
+      if (conversationWs?.readyState === WebSocket.OPEN) {
+        try {
+          conversationWs.send(JSON.stringify({ type: 'session.ping' }));
+        } catch (e) {
+          console.error('Keepalive failed:', e);
+        }
+      }
+      if (Date.now() - lastActivity > 45000) {
+        console.warn('No activity for 45s - connection may be dead');
+      }
+    }, 15000);
+
     const initializeSession = () => {
       console.log('=== INITIALIZING CONVERSATION SESSION ===');
       console.log('Agent ID:', agentId);
@@ -1068,6 +1180,7 @@ fastify.register(async (fastify) => {
         conversationWs.send(JSON.stringify(sessionUpdate));
       }
     };
+
     const initializeTranscriptionSession = () => {
       console.log('=== INITIALIZING TRANSCRIPTION SESSION ===');
       const transcriptionSessionUpdate = {
@@ -1083,6 +1196,7 @@ fastify.register(async (fastify) => {
         transcriptionWs.send(JSON.stringify(transcriptionSessionUpdate));
       }
     };
+
     const sendInitialConversationItem = () => {
       const initialConversationItem = {
         type: 'conversation.item.create',
@@ -1102,6 +1216,7 @@ fastify.register(async (fastify) => {
         conversationWs.send(JSON.stringify({ type: 'response.create' }));
       }
     };
+
     const handleSpeechStartedEvent = () => {
       if (markQueue.length > 0 && responseStartTimestampTwilio != null) {
         const elapsedTime = latestMediaTimestamp - responseStartTimestampTwilio;
@@ -1122,6 +1237,7 @@ fastify.register(async (fastify) => {
         responseStartTimestampTwilio = null;
       }
     };
+
     const sendMark = (connection, streamSid) => {
       if (streamSid && connection.readyState === WebSocket.OPEN) {
         const markEvent = {
@@ -1133,15 +1249,11 @@ fastify.register(async (fastify) => {
         markQueue.push('responsePart');
       }
     };
-    conversationWs.on('open', () => {
-      console.log('Connected to OpenAI Conversation API');
-      setTimeout(initializeSession, 100);
-      if (agentConfig.speaksFirst === 'ai') {
-        setTimeout(sendInitialConversationItem, 200);
-      }
-    });
-    conversationWs.on('message', (data) => {
+
+    // Extracted message handler for reusability
+    const handleConversationMessage = (data) => {
       try {
+        lastActivity = Date.now();
         const response = JSON.parse(data);
         if (LOG_EVENT_TYPES.includes(response.type)) {
           console.log(`Conversation event: ${response.type}`, response);
@@ -1168,15 +1280,23 @@ fastify.register(async (fastify) => {
               conversationWs.send(JSON.stringify({ type: 'response.create' }));
             }
             setTimeout(async () => {
-              if (twilioCallSid) {
-                console.log(`🔚 Ending Twilio call ${twilioCallSid}`);
-                await endTwilioCall(twilioCallSid, args.reason);
-              } else {
-                console.warn('⚠️ No Twilio CallSid available to end call');
-              }
-              if (connection.readyState === WebSocket.OPEN) {
-                connection.close();
-              }
+              let attempts = 0;
+              const maxAttempts = 30; // 3 seconds max wait
+              const waitForCompletion = setInterval(() => {
+                attempts++;
+                if (markQueue.length === 0 || attempts >= maxAttempts) {
+                  clearInterval(waitForCompletion);
+                  if (twilioCallSid) {
+                    console.log(`🔚 Ending Twilio call ${twilioCallSid}`);
+                    endTwilioCall(twilioCallSid, args.reason);
+                  } else {
+                    console.warn('⚠️ No Twilio CallSid available to end call');
+                  }
+                  if (connection.readyState === WebSocket.OPEN) {
+                    connection.close();
+                  }
+                }
+              }, 100);
             }, 3000);
           }
           if (response.name === 'save_contact') {
@@ -1184,31 +1304,16 @@ fastify.register(async (fastify) => {
             console.log(`📇 SAVE_CONTACT function triggered:`, args);
             (async () => {
               try {
-                const fetchResponse = await fetch(
-                  'https://mxavpgblepptefeuodvg.supabase.co/functions/v1/create-contact',
-                  {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im14YXZwZ2JsZXBwdGVmZXVvZHZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyMjE0ODYsImV4cCI6MjA3Mzc5NzQ4Nn0.ZttgxbiJr0DK-Cr-E99reFPwWhX5CtnNu7BIeykOAEo'
-                    },
-                    body: JSON.stringify({
-                      agentId: agentId,
-                      firstName: args.firstName,
-                      lastName: args.lastName,
-                      phoneNumber: args.phoneNumber,
-                      email: args.email || null,
-                      tags: ['voice-call'],
-                      notes: args.notes || null,
-                      callId: callId,
-                      userId: userId
-                    })
-                  }
-                );
-                const result = await fetchResponse.json();
+                const metadata = {
+                  name: `${args.firstName} ${args.lastName}`,
+                  email: args.email || null,
+                  notes: args.notes || null,
+                  tags: args.callerType ? [args.callerType, 'voice-call'] : ['voice-call']
+                };
+                const contact = await createOrUpdateContact(userId, args.phoneNumber, callId, agentId, metadata);
                 let functionOutput;
-                if (!fetchResponse.ok) {
-                  console.error('Failed to save contact:', result);
+                if (!contact) {
+                  console.error('Failed to save contact to Supabase');
                   functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
                 } else {
                   console.log(`✅ Contact saved: ${args.firstName} ${args.lastName}`);
@@ -1243,20 +1348,25 @@ fastify.register(async (fastify) => {
           }
         }
         if (response.type === 'response.output_audio.delta' && response.delta) {
-          if (connection.readyState === WebSocket.OPEN) {
-            const audioDelta = {
-              event: 'media',
-              streamSid: streamSid,
-              media: { payload: response.delta }
-            };
-            connection.send(JSON.stringify(audioDelta));
-            if (!responseStartTimestampTwilio) {
-              responseStartTimestampTwilio = latestMediaTimestamp;
+          try {
+            if (connection.readyState === WebSocket.OPEN) {
+              const audioDelta = {
+                event: 'media',
+                streamSid: streamSid,
+                media: { payload: response.delta }
+              };
+              connection.send(JSON.stringify(audioDelta));
+              if (!responseStartTimestampTwilio) {
+                responseStartTimestampTwilio = latestMediaTimestamp;
+              }
+              if (response.item_id) {
+                lastAssistantItem = response.item_id;
+              }
+              sendMark(connection, streamSid);
             }
-            if (response.item_id) {
-              lastAssistantItem = response.item_id;
-            }
-            sendMark(connection, streamSid);
+          } catch (audioError) {
+            console.error('Audio streaming error (non-fatal):', audioError);
+            // Skip faulty audio chunk to prevent crash
           }
         }
         if (response.type === 'input_audio_buffer.speech_started') {
@@ -1265,13 +1375,37 @@ fastify.register(async (fastify) => {
       } catch (error) {
         console.error('Error processing conversation message:', error);
       }
+    };
+
+    conversationWs.on('open', () => {
+      console.log('Connected to OpenAI Conversation API');
+      setTimeout(initializeSession, 100);
+      if (agentConfig.speaksFirst === 'ai') {
+        setTimeout(sendInitialConversationItem, 200);
+      }
     });
+
+    conversationWs.on('message', handleConversationMessage);
+
+    conversationWs.on('close', (code, reason) => {
+      console.log(`Disconnected from OpenAI Conversation API. Code: ${code}, Reason: ${reason}`);
+      if (code !== 1000 && connection.readyState === WebSocket.OPEN) {
+        reconnectConversationWs();
+      }
+    });
+
+    conversationWs.on('error', (error) => {
+      console.error('Error in Conversation WebSocket:', error);
+    });
+
     transcriptionWs.on('open', () => {
       console.log('Connected to OpenAI Transcription API');
       setTimeout(initializeTranscriptionSession, 200);
     });
+
     transcriptionWs.on('message', (data) => {
       try {
+        lastActivity = Date.now();
         const response = JSON.parse(data);
         console.log(`📝 Transcription event: ${response.type}`);
         if (response.type === 'conversation.item.input_audio_transcription.completed') {
@@ -1294,8 +1428,10 @@ fastify.register(async (fastify) => {
         console.error('Error processing transcription message:', error);
       }
     });
+
     connection.on('message', (message) => {
       try {
+        lastActivity = Date.now();
         const data = JSON.parse(message);
         switch (data.event) {
           case 'media':
@@ -1338,6 +1474,7 @@ fastify.register(async (fastify) => {
         console.error('Error parsing message:', error, 'Message:', message);
       }
     });
+
     connection.on('close', () => {
       console.log(`Client disconnected from media stream (user: ${userId || 'global'})`);
       if (callId) {
@@ -1351,6 +1488,7 @@ fastify.register(async (fastify) => {
         console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries (user: ${userId || 'global'})`);
       }
       activeConnections.delete(connectionData);
+      clearInterval(keepAliveInterval);
       if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
         conversationWs.close();
       }
@@ -1358,18 +1496,15 @@ fastify.register(async (fastify) => {
         transcriptionWs.close();
       }
     });
+
     connection.on('error', (error) => {
       console.error('WebSocket connection error:', error);
     });
-    conversationWs.on('close', (code, reason) => {
-      console.log(`Disconnected from OpenAI Conversation API. Code: ${code}, Reason: ${reason}`);
-    });
-    conversationWs.on('error', (error) => {
-      console.error('Error in Conversation WebSocket:', error);
-    });
+
     transcriptionWs.on('close', (code, reason) => {
       console.log(`Disconnected from OpenAI Transcription API. Code: ${code}, Reason: ${reason}`);
     });
+
     transcriptionWs.on('error', (error) => {
       console.error('Error in Transcription WebSocket:', error);
     });
@@ -1405,7 +1540,7 @@ const start = async () => {
     console.log('✅ Speaking order endpoint: ACTIVE');
     console.log('✅ Contact management: ACTIVE');
     console.log('✅ End call function: ACTIVE');
-    console.log('✅ Save contact function: ACTIVE (Direct HTTP)');
+    console.log('✅ Save contact function: ACTIVE (Direct Supabase)');
     console.log('✅ CORS configuration: FIXED');
     console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
     console.log('✅ Twilio client:', twilioClient ? 'ACTIVE' : 'DISABLED (missing credentials)');
