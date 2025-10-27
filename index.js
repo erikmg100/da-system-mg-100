@@ -7,6 +7,9 @@ import fastifyCors from '@fastify/cors';
 import { createClient } from '@supabase/supabase-js';
 import twilio from 'twilio';
 import { promises as dns } from 'dns';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
 
