@@ -1024,6 +1024,45 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
   }
 });
 
+// Background audio player
+function startBackgroundAudio(connection, streamSid) {
+  if (!backgroundAudioBuffer) {
+    console.log('Background audio not available');
+    return null;
+  }
+
+  console.log('🎵 Starting background audio stream');
+  
+  const interval = setInterval(() => {
+    try {
+      if (connection.readyState !== WebSocket.OPEN) {
+        clearInterval(interval);
+        return;
+      }
+
+      // Send a small chunk of background audio at reduced volume
+      // Note: This is a simplified implementation
+      const chunkSize = 640; // Small audio chunk
+      const chunk = backgroundAudioBuffer.slice(0, chunkSize).toString('base64');
+      
+      const audioPayload = {
+        event: 'media',
+        streamSid: streamSid,
+        media: {
+          payload: chunk
+        }
+      };
+      
+      connection.send(JSON.stringify(audioPayload));
+    } catch (error) {
+      console.error('Background audio streaming error:', error);
+      clearInterval(interval);
+    }
+  }, 3000); // Send every 3 seconds (subtle background)
+
+  return interval;
+}
+
 fastify.register(async (fastify) => {
   fastify.get('/media-stream/:agentId/:userId?', { websocket: true }, (connection, req) => {
     const agentId = req.params.agentId || 'default';
