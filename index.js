@@ -408,6 +408,7 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
   try {
     const { userId, agentId = 'default', prompt, speaksFirst, voice, fullConfig } = request.body;
     console.log('📥 Sync request from Lovable:', { userId, agentId, speaksFirst, voice, hasFullConfig: !!fullConfig });
+    console.log('🔍 DEBUG - fullConfig.backgroundNoise:', fullConfig?.backgroundNoise);
     const agent = getUserAgent(userId, agentId);
     if (prompt !== undefined) agent.systemMessage = prompt;
     if (speaksFirst !== undefined) agent.speaksFirst = speaksFirst ? 'ai' : 'caller';
@@ -424,6 +425,7 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
     agent.updatedAt = new Date().toISOString();
     setUserAgent(userId, agentId, agent);
     console.log(`✅ Synced agent config for ${userId || 'global'}/${agentId}`);
+    console.log('🔍 DEBUG - agent.backgroundNoise after sync:', agent.backgroundNoise);
     reply.send({ success: true, agent });
   } catch (error) {
     console.error('❌ Sync error:', error);
