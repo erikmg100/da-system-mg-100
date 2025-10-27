@@ -169,6 +169,31 @@ const VOICE = 'marin';
 const PORT = process.env.PORT || 3000;
 let activeConnections = new Set();
 
+// Background audio setup
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const BACKGROUND_AUDIO_PATH = path.join(__dirname, 'office-ambience.mp3');
+const BACKGROUND_VOLUME = 0.15; // 15% volume - subtle background
+
+let backgroundAudioBuffer = null;
+
+// Load background audio on startup
+async function loadBackgroundAudio() {
+  try {
+    if (fs.existsSync(BACKGROUND_AUDIO_PATH)) {
+      backgroundAudioBuffer = fs.readFileSync(BACKGROUND_AUDIO_PATH);
+      console.log('✅ Background audio loaded:', BACKGROUND_AUDIO_PATH);
+    } else {
+      console.warn('⚠️ Background audio file not found:', BACKGROUND_AUDIO_PATH);
+    }
+  } catch (error) {
+    console.error('Failed to load background audio:', error);
+  }
+}
+
+// Call on startup
+loadBackgroundAudio();
+
 const LOG_EVENT_TYPES = [
   'error',
   'response.content.done',
