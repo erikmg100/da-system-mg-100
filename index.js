@@ -1011,6 +1011,8 @@ fastify.register(async (fastify) => {
     let streamSid = null;
     let callId = null;
     let twilioCallSid = null;
+    let callerNumber = null; // "From" number - who is calling
+    let calledNumber = null; // "To" number - which number was called
     let latestMediaTimestamp = 0;
     let lastAssistantItem = null;
     let markQueue = [];
@@ -1315,8 +1317,46 @@ fastify.register(async (fastify) => {
                   phoneNumber: phoneNumber,
                   email: args.email,
                   callerType: args.callerType,
-                  callerId: callerNumber
+                  callerId: callerNumber,
+                  calledNumber: calledNumber
                 });
+                
+                // CRITICAL: Query Supabase to find which user owns the phone number that was called
+                let contactUserId = userId; // Start with userId from URL params if available
+                if (!contactUserId && calledNumber && calledNumber !== 'Unknown' && supabase) {
+                  console.log(`🔍 Querying phone_numbers table for called number: ${calledNumber}`);
+                  const { data: phoneData, error: phoneError } = await supabase
+                    .from('phone_numbers')
+                    .select('user_id')
+                    .eq('phone_number', calledNumber)
+                    .maybeSingle();
+                  
+                  if (phoneError) {
+                    console.error('Error querying phone_numbers:', phoneError);
+                  } else if (phoneData) {
+                    contactUserId = phoneData.user_id;
+                    console.log(`✅ Found user_id ${contactUserId} for phone number ${calledNumber}`);
+                  } else {
+                    console.warn(`⚠️ No user found for phone number ${calledNumber}`);
+                  }
+                }
+                
+                if (!contactUserId) {
+                  console.error('❌ Cannot save contact: No user_id available. RLS policies will block the insert.');
+                  const functionOutput = { success: false, message: 'Unable to determine account owner for contact save' };
+                  if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+                    conversationWs.send(JSON.stringify({
+                      type: 'conversation.item.create',
+                      item: {
+                        type: 'function_call_output',
+                        call_id: response.call_id,
+                        output: JSON.stringify(functionOutput)
+                      }
+                    }));
+                    conversationWs.send(JSON.stringify({ type: 'response.create' }));
+                  }
+                  return;
+                }
                 
                 const metadata = {
                   name: `${args.firstName} ${args.lastName}`,
@@ -1324,13 +1364,13 @@ fastify.register(async (fastify) => {
                   notes: args.notes || null,
                   tags: args.callerType ? [args.callerType, 'voice-call'] : ['voice-call']
                 };
-                const contact = await createOrUpdateContact(userId, phoneNumber, callId, agentId, metadata);
+                const contact = await createOrUpdateContact(contactUserId, phoneNumber, callId, agentId, metadata);
                 let functionOutput;
                 if (!contact) {
                   console.error('Failed to save contact to Supabase');
                   functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
                 } else {
-                  console.log(`✅ Contact saved: ${args.firstName} ${args.lastName}`);
+                  console.log(`✅ Contact saved: ${args.firstName} ${args.lastName} for user ${contactUserId}`);
                   functionOutput = { success: true, message: `Contact saved for ${args.firstName} ${args.lastName}` };
                 }
                 if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
@@ -1469,9 +1509,11 @@ fastify.register(async (fastify) => {
             streamSid = data.start.streamSid;
             callId = generateCallId();
             twilioCallSid = data.start.callSid;
+            callerNumber = data.start.customParameters?.From || data.start.callerNumber || 'Unknown';
+            calledNumber = data.start.customParameters?.To || 'Unknown';
             ACTIVE_CALL_SIDS[callId] = twilioCallSid;
-            console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, Twilio SID: ${twilioCallSid}, User: ${userId || 'global'}`);
-            createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId);
+            console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, Twilio SID: ${twilioCallSid}, From: ${callerNumber}, To: ${calledNumber}, User: ${userId || 'global'}`);
+            createCallRecord(callId, streamSid, agentId, callerNumber, userId);
             responseStartTimestampTwilio = null;
             latestMediaTimestamp = 0;
             break;
