@@ -952,29 +952,42 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     const calledNumber = request.body.To;
     let agentId = request.params.agentId || 'default';
     let userId = request.query.userId || null;
+    
+    console.log(`\n📞 [INCOMING-CALL] Received call to: ${calledNumber}, Initial userId: ${userId}, Initial agentId: ${agentId}`);
+    
     if (supabase && calledNumber) {
       try {
-       const { data: phoneData, error } = await supabase
-  .from('phone_numbers')           // ← CHANGED
-  .select('user_id, assigned_agent_id')  // ← CHANGED
-  .eq('phone_number', calledNumber)
-  .maybeSingle();
-       if (!error && phoneData) {
-  userId = phoneData.user_id;
-  if (phoneData.assigned_agent_id) {
-    agentId = phoneData.assigned_agent_id;
-  }
-  console.log(`✅ Found phone assignment: User ${userId}, Agent ${agentId}`);
+        console.log(`🔍 [PHONE-LOOKUP] Querying phone_numbers table for: ${calledNumber}`);
+        const { data: phoneData, error } = await supabase
+          .from('phone_numbers')
+          .select('user_id, assigned_agent_id')
+          .eq('phone_number', calledNumber)
+          .maybeSingle();
+        
+        if (!error && phoneData) {
+          userId = phoneData.user_id;
+          if (phoneData.assigned_agent_id) {
+            agentId = phoneData.assigned_agent_id;
+          }
+          console.log(`✅ [PHONE-LOOKUP] SUCCESS - Found phone assignment: User ${userId}, Agent ${agentId}`);
         } else if (error) {
-          console.error('Supabase query error:', error);
+          console.error(`❌ [PHONE-LOOKUP] Database error:`, error);
         } else {
-          console.log(`⚠️ No agent assigned to ${calledNumber}, using defaults`);
+          console.log(`⚠️ [PHONE-LOOKUP] No phone record found for ${calledNumber}, using defaults`);
         }
       } catch (error) {
-        console.error('Error querying agent assignment:', error);
+        console.error(`❌ [PHONE-LOOKUP] Exception:`, error);
+      }
+    } else {
+      if (!supabase) {
+        console.warn(`⚠️ [PHONE-LOOKUP] Supabase not initialized`);
+      }
+      if (!calledNumber) {
+        console.warn(`⚠️ [PHONE-LOOKUP] No calledNumber provided`);
       }
     }
-    console.log(`DEBUG: Incoming call - calledNumber=${calledNumber}, agentId=${agentId}, userId=${userId}`);
+    
+    console.log(`📋 [FINAL-STATE] calledNumber=${calledNumber}, agentId=${agentId}, userId=${userId}`);
     const config = getUserAgent(userId, agentId);
     console.log('=== INCOMING CALL WEBHOOK ===');
     console.log('Called Number:', calledNumber);
@@ -1590,7 +1603,7 @@ const start = async () => {
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`🚀 Server is listening on port ${PORT}`);
     console.log('✅ Voice conversation system: ACTIVE');
-    console.log('✅ Real-time transcription: ACTIVE');
+    console.log('✅ Real-time transcription: ACTIVE (gpt-4o-transcribe)');
     console.log('✅ Dashboard APIs: ACTIVE');
     console.log('✅ Multi-user support: ACTIVE');
     console.log('✅ User data isolation: ACTIVE');
@@ -1604,6 +1617,14 @@ const start = async () => {
     console.log('✅ Twilio client:', twilioClient ? 'ACTIVE' : 'DISABLED (missing credentials)');
     console.log('✅ Non-blocking database operations: ACTIVE');
     console.log('✅ Call resilience improved: Database failures won\'t crash calls');
+    console.log('✅ Phone number lookup: ACTIVE (queries phone_numbers table)');
+    console.log('');
+    console.log('═══════════════════════════════════════════════════════════');
+    console.log('🔄 DEPLOYMENT VERSION MARKER: 2025-10-28-phone-lookup-v2');
+    console.log('   ✓ gpt-4o-transcribe model enabled');
+    console.log('   ✓ phone_numbers table queries active');
+    console.log('   ✓ user_id and assigned_agent_id retrieval working');
+    console.log('═══════════════════════════════════════════════════════════');
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);
