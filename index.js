@@ -169,31 +169,6 @@ const VOICE = 'marin';
 const PORT = process.env.PORT || 3000;
 let activeConnections = new Set();
 
-// Background audio setup
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const BACKGROUND_AUDIO_PATH = path.join(__dirname, 'office-ambience.ulaw');
-const BACKGROUND_VOLUME = 0.15; // 15% volume - subtle background
-
-let backgroundAudioBuffer = null;
-
-// Load background audio on startup
-async function loadBackgroundAudio() {
-  try {
-    if (fs.existsSync(BACKGROUND_AUDIO_PATH)) {
-      backgroundAudioBuffer = fs.readFileSync(BACKGROUND_AUDIO_PATH);
-      console.log('✅ Background audio loaded:', BACKGROUND_AUDIO_PATH);
-    } else {
-      console.warn('⚠️ Background audio file not found:', BACKGROUND_AUDIO_PATH);
-    }
-  } catch (error) {
-    console.error('Failed to load background audio:', error);
-  }
-}
-
-// Call on startup
-loadBackgroundAudio();
-
 const LOG_EVENT_TYPES = [
   'error',
   'response.content.done',
@@ -408,7 +383,6 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
   try {
     const { userId, agentId = 'default', prompt, speaksFirst, voice, fullConfig } = request.body;
     console.log('📥 Sync request from Lovable:', { userId, agentId, speaksFirst, voice, hasFullConfig: !!fullConfig });
-    console.log('🔍 DEBUG - fullConfig.backgroundNoise:', fullConfig?.backgroundNoise);
     const agent = getUserAgent(userId, agentId);
     if (prompt !== undefined) agent.systemMessage = prompt;
     if (speaksFirst !== undefined) agent.speaksFirst = speaksFirst ? 'ai' : 'caller';
@@ -418,14 +392,12 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
         name: fullConfig.agentName || agent.name,
         personality: fullConfig.personality || agent.personality,
         greetingMessage: fullConfig.greetingMessage || agent.greetingMessage,
-        language: fullConfig.language || agent.language,
-        backgroundNoise: fullConfig.backgroundNoise || false
+        language: fullConfig.language || agent.language
       });
     }
     agent.updatedAt = new Date().toISOString();
     setUserAgent(userId, agentId, agent);
     console.log(`✅ Synced agent config for ${userId || 'global'}/${agentId}`);
-    console.log('🔍 DEBUG - agent.backgroundNoise after sync:', agent.backgroundNoise);
     reply.send({ success: true, agent });
   } catch (error) {
     console.error('❌ Sync error:', error);
@@ -504,64 +476,6 @@ fastify.post('/api/contacts', async (request, reply) => {
   }
 });
 
-// Background audio player
-function startBackgroundAudio(connection, streamSid) {
-  if (!backgroundAudioBuffer) {
-    console.log('Background audio not available');
-    return null;
-  }
-
-  console.log('🎵 Starting background audio stream');
-  
-  let position = 0;
-  
-  const interval = setInterval(() => {
-    try {
-      if (connection.readyState !== WebSocket.OPEN) {
-        clearInterval(interval);
-        return;
-      }
-
-      const chunkSize = 640;
-      
-      // Loop the audio if we reach the end
-      if (position >= backgroundAudioBuffer.length) {
-        position = 0;
-      }
-      
-      // Get the next chunk
-      let chunk;
-      if (position + chunkSize <= backgroundAudioBuffer.length) {
-        chunk = backgroundAudioBuffer.slice(position, position + chunkSize);
-      } else {
-        // If we're near the end, wrap around
-        const firstPart = backgroundAudioBuffer.slice(position);
-        const secondPart = backgroundAudioBuffer.slice(0, chunkSize - firstPart.length);
-        chunk = Buffer.concat([firstPart, secondPart]);
-        position = chunkSize - firstPart.length;
-      }
-      
-      const base64Audio = chunk.toString('base64');
-      position += chunkSize;
-      
-      const audioPayload = {
-        event: 'media',
-        streamSid: streamSid,
-        media: {
-          payload: base64Audio
-        }
-      };
-      
-      connection.send(JSON.stringify(audioPayload));
-    } catch (error) {
-      console.error('Background audio streaming error:', error);
-      clearInterval(interval);
-    }
-  }, 20);
-
-  return interval;
-}
-
 fastify.register(async (fastify) => {
   fastify.get('/media-stream/:agentId/:userId?', { websocket: true }, (connection, req) => {
     const agentId = req.params.agentId || 'default';
@@ -570,12 +484,6 @@ fastify.register(async (fastify) => {
     console.log(`DEBUG: WebSocket URL: ${req.url}`);
     console.log(`DEBUG: URL params - agentId: ${agentId}, userId: ${userId}`);
     let agentConfig = getUserAgent(userId, agentId);
-    
-    // Start background audio if enabled
-    let backgroundAudioInterval = null;
-    if (agentConfig.backgroundNoise === true) {
-      console.log('🎵 Background noise enabled for agent:', agentConfig.name);
-    }
     
     console.log(`=== WEBSOCKET CONNECTION ===`);
     console.log(`Client connected for agent: ${agentId} (user: ${userId || 'global'})`);
@@ -933,13 +841,6 @@ fastify.register(async (fastify) => {
             createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId);
             responseStartTimestampTwilio = null;
             latestMediaTimestamp = 0;
-            
-            // Start background audio if enabled
-            if (agentConfig.backgroundNoise === true && !backgroundAudioInterval) {
-              setTimeout(() => {
-                backgroundAudioInterval = startBackgroundAudio(connection, streamSid);
-              }, 2000);
-            }
             break;
           case 'mark':
             if (markQueue.length > 0) {
@@ -955,11 +856,6 @@ fastify.register(async (fastify) => {
       }
     });
     connection.on('close', () => {
-      // Clean up background audio
-      if (backgroundAudioInterval) {
-        clearInterval(backgroundAudioInterval);
-      }
-      
       console.log(`Client disconnected from media stream (user: ${userId || 'global'})`);
       if (callId) {
         const transcriptCount = TRANSCRIPT_STORAGE[callId]?.length || 0;
@@ -1027,7 +923,6 @@ const start = async () => {
     console.log('✅ Twilio client:', twilioClient ? 'ACTIVE' : 'DISABLED (missing credentials)');
     console.log('✅ Non-blocking database operations: ACTIVE');
     console.log('✅ Call resilience improved: Database failures won\'t crash calls');
-    console.log('✅ Background audio support: ACTIVE');
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);
