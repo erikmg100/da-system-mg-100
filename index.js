@@ -172,7 +172,7 @@ let activeConnections = new Set();
 // Background audio setup
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const BACKGROUND_AUDIO_PATH = path.join(__dirname, 'office-ambience.mp3');
+const BACKGROUND_AUDIO_PATH = path.join(__dirname, 'office-ambience.ulaw');
 const BACKGROUND_VOLUME = 0.15; // 15% volume - subtle background
 
 let backgroundAudioBuffer = null;
@@ -513,6 +513,8 @@ function startBackgroundAudio(connection, streamSid) {
 
   console.log('🎵 Starting background audio stream');
   
+  let position = 0;
+  
   const interval = setInterval(() => {
     try {
       if (connection.readyState !== WebSocket.OPEN) {
@@ -520,15 +522,33 @@ function startBackgroundAudio(connection, streamSid) {
         return;
       }
 
-      // Send a small chunk of background audio at reduced volume
       const chunkSize = 640;
-      const chunk = backgroundAudioBuffer.slice(0, chunkSize).toString('base64');
+      
+      // Loop the audio if we reach the end
+      if (position >= backgroundAudioBuffer.length) {
+        position = 0;
+      }
+      
+      // Get the next chunk
+      let chunk;
+      if (position + chunkSize <= backgroundAudioBuffer.length) {
+        chunk = backgroundAudioBuffer.slice(position, position + chunkSize);
+      } else {
+        // If we're near the end, wrap around
+        const firstPart = backgroundAudioBuffer.slice(position);
+        const secondPart = backgroundAudioBuffer.slice(0, chunkSize - firstPart.length);
+        chunk = Buffer.concat([firstPart, secondPart]);
+        position = chunkSize - firstPart.length;
+      }
+      
+      const base64Audio = chunk.toString('base64');
+      position += chunkSize;
       
       const audioPayload = {
         event: 'media',
         streamSid: streamSid,
         media: {
-          payload: chunk
+          payload: base64Audio
         }
       };
       
@@ -537,7 +557,7 @@ function startBackgroundAudio(connection, streamSid) {
       console.error('Background audio streaming error:', error);
       clearInterval(interval);
     }
-  }, 3000);
+  }, 20);
 
   return interval;
 }
