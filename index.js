@@ -936,7 +936,7 @@ fastify.get('/api/contacts/:contactId/calls', { preHandler: [requireUser] }, asy
     reply.status(500).send({ error: 'Failed to fetch contact calls' });
   }
 });
-
+ 
 function calculateDuration(startTime, endTime) {
   if (!startTime || !endTime) return null;
   const start = new Date(startTime);
