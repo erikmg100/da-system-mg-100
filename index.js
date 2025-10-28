@@ -1304,13 +1304,27 @@ fastify.register(async (fastify) => {
             console.log(`📇 SAVE_CONTACT function triggered:`, args);
             (async () => {
               try {
+                // Handle both scenarios: caller confirms current number OR provides different number
+                const phoneNumber = args.phoneNumber && args.phoneNumber.trim() !== '' 
+                  ? args.phoneNumber 
+                  : callerNumber;
+                
+                console.log('Attempting to save contact:', {
+                  firstName: args.firstName,
+                  lastName: args.lastName,
+                  phoneNumber: phoneNumber,
+                  email: args.email,
+                  callerType: args.callerType,
+                  callerId: callerNumber
+                });
+                
                 const metadata = {
                   name: `${args.firstName} ${args.lastName}`,
                   email: args.email || null,
                   notes: args.notes || null,
                   tags: args.callerType ? [args.callerType, 'voice-call'] : ['voice-call']
                 };
-                const contact = await createOrUpdateContact(userId, args.phoneNumber, callId, agentId, metadata);
+                const contact = await createOrUpdateContact(userId, phoneNumber, callId, agentId, metadata);
                 let functionOutput;
                 if (!contact) {
                   console.error('Failed to save contact to Supabase');
