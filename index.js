@@ -346,11 +346,53 @@ fastify.post('/incoming-call/:agentId?', async (request, reply) => {
   console.log(`📞 Incoming call webhook triggered for agent: ${agentId}, user: ${userId || 'global'}`);
   const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
                           <Response>
+                            <Record recordingStatusCallback="https://${request.headers.host}/api/recording-status" recordingStatusCallbackMethod="POST" recordingStatusCallbackEvent="completed" />
                             <Connect>
                               <Stream url="wss://${request.headers.host}/media-stream/${agentId}/${userId || 'null'}" />
                             </Connect>
                           </Response>`;
   reply.type('text/xml').send(twimlResponse);
+});
+
+// Endpoint to receive recording status from Twilio
+fastify.post('/api/recording-status', async (request, reply) => {
+  try {
+    const { CallSid, RecordingUrl, RecordingSid, RecordingDuration } = request.body;
+    console.log('📼 Recording completed:', { CallSid, RecordingUrl, RecordingSid, RecordingDuration });
+    
+    // Find the call record by Twilio CallSid
+    const callRecord = CALL_RECORDS.find(record => {
+      const twilioSid = Object.entries(ACTIVE_CALL_SIDS).find(([_, sid]) => sid === CallSid);
+      return twilioSid && twilioSid[0] === record.callId;
+    });
+    
+    if (callRecord) {
+      // Save recording URL to Supabase
+      if (supabase) {
+        await safeSupabaseOperation(
+          async () => {
+            const { data, error } = await supabase
+              .from('call_logs')
+              .update({
+                recording_url: RecordingUrl,
+                recording_sid: RecordingSid,
+                recording_duration: RecordingDuration
+              })
+              .eq('call_id', callRecord.callId);
+            if (error) throw error;
+            return data;
+          },
+          `Save recording for ${callRecord.callId}`
+        );
+      }
+      console.log(`✅ Recording saved for call ${callRecord.callId}`);
+    }
+    
+    reply.send({ success: true });
+  } catch (error) {
+    console.error('❌ Recording status error:', error);
+    reply.status(500).send({ error: 'Failed to process recording status' });
+  }
 });
 
 fastify.get('/api/agent/:agentId?', { schema: { querystring: { type: 'object', properties: { userId: { type: 'string' } } } } }, async (request, reply) => {
@@ -512,8 +554,8 @@ fastify.register(async (fastify) => {
         }
       }
     }, 15000);
-    const OPENAI_CONVERSATION_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17';
-    const OPENAI_TRANSCRIPTION_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17';
+    const OPENAI_CONVERSATION_URL = 'wss://api.openai.com/v1/realtime';
+    const OPENAI_TRANSCRIPTION_URL = 'wss://api.openai.com/v1/realtime';
     const initializeConversationWs = () => {
       conversationWs = new WebSocket(OPENAI_CONVERSATION_URL, {
         headers: {
@@ -564,13 +606,31 @@ fastify.register(async (fastify) => {
       const sessionUpdate = {
         type: 'session.update',
         session: {
-          turn_detection: { type: 'server_vad' },
-          input_audio_format: 'g711_ulaw',
-          output_audio_format: 'g711_ulaw',
-          voice: agentConfig.voice || VOICE,
+          type: 'realtime',
+          model: 'gpt-realtime',
+          output_modalities: ['audio'],
+          audio: {
+            input: {
+              format: {
+                type: 'audio/g711_ulaw',
+                rate: 8000
+              },
+              turn_detection: {
+                type: 'semantic_vad',
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500
+              }
+            },
+            output: {
+              format: {
+                type: 'audio/g711_ulaw'
+              },
+              voice: agentConfig.voice || VOICE
+            }
+          },
           instructions: agentConfig.systemMessage || DEFAULT_AGENT_TEMPLATE.systemMessage,
-          modalities: ['text', 'audio'],
-          temperature: 0.8,
+          temperature: 0.7,
           tools: [
             {
               type: 'function',
@@ -633,8 +693,17 @@ fastify.register(async (fastify) => {
       const sessionUpdate = {
         type: 'session.update',
         session: {
-          turn_detection: null,
-          input_audio_format: 'g711_ulaw',
+          type: 'realtime',
+          model: 'gpt-realtime',
+          audio: {
+            input: {
+              format: {
+                type: 'audio/g711_ulaw',
+                rate: 8000
+              },
+              turn_detection: null
+            }
+          },
           input_audio_transcription: {
             model: 'whisper-1'
           }
