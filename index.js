@@ -42,7 +42,8 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
         });
       }
     });
-    console.log('✅ Supabase client initialized with service role key');
+    console.log('✅ Supabase client initialized with SERVICE ROLE KEY (bypasses RLS)');
+    console.log('   This allows phone_numbers lookup and contact creation to work correctly');
   } catch (error) {
     console.error('Failed to initialize Supabase:', error);
   }
@@ -57,12 +58,19 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
         });
       }
     });
-    console.warn('⚠️ Supabase initialized with anon key - some operations may fail due to RLS policies');
+    console.error('❌❌❌ CRITICAL ERROR: Supabase initialized with ANON KEY instead of SERVICE ROLE KEY ❌❌❌');
+    console.error('   ⚠️ Phone number lookups will FAIL due to RLS policies');
+    console.error('   ⚠️ user_id will be NULL in call_activities');
+    console.error('   ⚠️ Contacts will NOT be created');
+    console.error('   ⚠️ Set SUPABASE_SERVICE_ROLE_KEY in Railway environment variables');
+    console.error('   ⚠️ ANON KEY detected: ' + SUPABASE_ANON_KEY.substring(0, 20) + '...');
+    console.error('   ✅ SERVICE ROLE KEY should start with: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...');
   } catch (error) {
     console.error('Failed to initialize Supabase:', error);
   }
 } else {
-  console.warn('⚠️ Supabase credentials not found - call logging to database disabled');
+  console.error('❌ CRITICAL: Supabase credentials not found - call logging to database disabled');
+  console.error('   Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in environment variables');
 }
 
 const fastify = Fastify({
@@ -1613,7 +1621,19 @@ const start = async () => {
     console.log('✅ End call function: ACTIVE');
     console.log('✅ Save contact function: ACTIVE (Direct Supabase)');
     console.log('✅ CORS configuration: FIXED');
-    console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
+    if (supabase && SUPABASE_SERVICE_ROLE_KEY) {
+      console.log('✅ Supabase integration: ACTIVE with SERVICE ROLE KEY');
+      console.log('   → Phone number lookups: ENABLED');
+      console.log('   → Contact creation: ENABLED');
+      console.log('   → RLS bypass: ENABLED');
+    } else if (supabase && SUPABASE_ANON_KEY) {
+      console.log('❌ Supabase integration: DEGRADED (using ANON KEY)');
+      console.log('   → Phone number lookups: WILL FAIL');
+      console.log('   → Contact creation: WILL FAIL');
+      console.log('   → Fix: Set SUPABASE_SERVICE_ROLE_KEY in Railway');
+    } else {
+      console.log('❌ Supabase integration: DISABLED (missing credentials)');
+    }
     console.log('✅ Twilio client:', twilioClient ? 'ACTIVE' : 'DISABLED (missing credentials)');
     console.log('✅ Non-blocking database operations: ACTIVE');
     console.log('✅ Call resilience improved: Database failures won\'t crash calls');
