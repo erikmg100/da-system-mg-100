@@ -954,15 +954,17 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     let userId = request.query.userId || null;
     if (supabase && calledNumber) {
       try {
-        const { data: agent, error } = await supabase
-          .from('agent_prompts')
-          .select('id, user_id')
-          .eq('phone_number', calledNumber)
-          .maybeSingle();
-        if (!error && agent) {
-          agentId = agent.id;
-          userId = agent.user_id;
-          console.log(`✅ Found agent for ${calledNumber}: Agent ${agentId}, User ${userId}`);
+       const { data: phoneData, error } = await supabase
+  .from('phone_numbers')           // ← CHANGED
+  .select('user_id, assigned_agent_id')  // ← CHANGED
+  .eq('phone_number', calledNumber)
+  .maybeSingle();
+       if (!error && phoneData) {
+  userId = phoneData.user_id;
+  if (phoneData.assigned_agent_id) {
+    agentId = phoneData.assigned_agent_id;
+  }
+  console.log(`✅ Found phone assignment: User ${userId}, Agent ${agentId}`);
         } else if (error) {
           console.error('Supabase query error:', error);
         } else {
