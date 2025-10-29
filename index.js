@@ -42,8 +42,7 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
         });
       }
     });
-    console.log('✅ Supabase client initialized with SERVICE ROLE KEY (bypasses RLS)');
-    console.log('   This allows phone_numbers lookup and contact creation to work correctly');
+    console.log('✅ Supabase client initialized with service role key');
   } catch (error) {
     console.error('Failed to initialize Supabase:', error);
   }
@@ -58,19 +57,12 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
         });
       }
     });
-    console.error('❌❌❌ CRITICAL ERROR: Supabase initialized with ANON KEY instead of SERVICE ROLE KEY ❌❌❌');
-    console.error('   ⚠️ Phone number lookups will FAIL due to RLS policies');
-    console.error('   ⚠️ user_id will be NULL in call_activities');
-    console.error('   ⚠️ Contacts will NOT be created');
-    console.error('   ⚠️ Set SUPABASE_SERVICE_ROLE_KEY in Railway environment variables');
-    console.error('   ⚠️ ANON KEY detected: ' + SUPABASE_ANON_KEY.substring(0, 20) + '...');
-    console.error('   ✅ SERVICE ROLE KEY should start with: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...');
+    console.warn('⚠️ Supabase initialized with anon key - some operations may fail due to RLS policies');
   } catch (error) {
     console.error('Failed to initialize Supabase:', error);
   }
 } else {
-  console.error('❌ CRITICAL: Supabase credentials not found - call logging to database disabled');
-  console.error('   Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in environment variables');
+  console.warn('⚠️ Supabase credentials not found - call logging to database disabled');
 }
 
 const fastify = Fastify({
@@ -301,67 +293,173 @@ function calculateConfidence(logprobs) {
   return Math.exp(avgLogprob);
 }
 
-// FIXED: Create/update contact using Supabase client directly
-async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metadata = {}) {
-  if (!supabase || !userId) {
-    console.log('⚠️ Contact creation skipped: Supabase not available or no userId');
+// 🆕 UNIVERSAL AUTOMATIC CONTACT EXTRACTION
+async function extractContactFromTranscript(callId, userId, callerNumber) {
+  console.log(`🔍 [extractContactFromTranscript] Starting for call ${callId}`);
+  
+  const transcript = TRANSCRIPT_STORAGE[callId];
+  if (!transcript || transcript.length === 0) {
+    console.log('⚠️ No transcript available for contact extraction');
     return null;
   }
+
+  // Build full transcript text
+  const fullTranscript = transcript
+    .map(entry => `${entry.speaker}: ${entry.text}`)
+    .join('\n');
+
+  console.log('📝 Transcript for analysis:', fullTranscript.substring(0, 500) + '...');
+
+  try {
+    // Use OpenAI to extract structured contact info
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a contact information extractor. Extract first name, last name, email, and any relevant notes from call transcripts. Return ONLY valid JSON with keys: firstName, lastName, email (or null if not mentioned), callerType (new_client/existing_client/unknown), notes. If information is not mentioned, use null.'
+          },
+          {
+            role: 'user',
+            content: `Extract contact information from this call transcript:\n\n${fullTranscript}`
+          }
+        ],
+        temperature: 0.1
+      })
+    });
+
+    const data = await response.json();
+    const extractedInfo = JSON.parse(data.choices[0].message.content);
+    
+    console.log('✅ Extracted contact info:', extractedInfo);
+
+    // Only save if we at least got a name
+    if (extractedInfo.firstName) {
+      await createOrUpdateContact(
+        userId,
+        callerNumber,
+        callId,
+        null, // agentId not needed for transcript extraction
+        extractedInfo
+      );
+      console.log('✅ Contact automatically saved from transcript');
+      return extractedInfo;
+    } else {
+      console.log('⚠️ No contact name found in transcript - skipping save');
+      return null;
+    }
+  } catch (error) {
+    console.error('❌ Error extracting contact from transcript:', error);
+    return null;
+  }
+}
+
+// FIXED: Create/update contact using Supabase client directly - ENHANCED for automatic extraction
+async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metadata = {}) {
+  if (!supabase) {
+    console.log('⚠️ Contact creation skipped: Supabase not available');
+    return null;
+  }
+
+  // Use system/fallback user ID if no userId provided
+  const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
+  const effectiveUserId = userId || SYSTEM_USER_ID;
+  
+  if (!userId) {
+    console.log(`⚠️ No userId available - using system fallback ID for contact ${phoneNumber}`);
+  }
+
+  console.log('💾 [createOrUpdateContact] Starting with:', {
+    userId: effectiveUserId,
+    phoneNumber,
+    callId,
+    agentId,
+    metadata
+  });
+
   const result = await safeSupabaseOperation(
     async () => {
+      // Prepare contact data from metadata
+      const contactData = {
+        user_id: effectiveUserId,
+        phone_number: phoneNumber,
+        name: metadata.firstName && metadata.lastName 
+          ? `${metadata.firstName} ${metadata.lastName}`.trim()
+          : metadata.firstName || metadata.name || null,
+        email: metadata.email || null,
+        notes: metadata.notes || null,
+        tags: metadata.callerType ? [metadata.callerType] : (metadata.tags || ['voice-call']),
+        custom_fields: {
+          ...(metadata.customFields || {}),
+          caller_type: metadata.callerType || 'unknown',
+          source: agentId ? 'agent_function_call' : 'transcript_extraction',
+          last_call_id: callId
+        }
+      };
+
       // Check for existing contact
       const { data: existing, error: fetchError } = await supabase
         .from('contacts')
         .select('*')
-        .eq('user_id', userId)
+        .eq('user_id', effectiveUserId)
         .eq('phone_number', phoneNumber)
         .maybeSingle();
+      
       if (fetchError) throw fetchError;
+      
       if (existing) {
         // Update existing contact
+        const updates = {
+          last_call_id: callId,
+          last_contact: new Date().toISOString(),
+          total_calls: (existing.total_calls || 0) + 1,
+          updated_at: new Date().toISOString()
+        };
+
+        // Only update fields if new data provided
+        if (contactData.name) updates.name = contactData.name;
+        if (contactData.email) updates.email = contactData.email;
+        if (contactData.notes) updates.notes = contactData.notes;
+        if (contactData.tags.length > 0) {
+          updates.tags = [...new Set([...(existing.tags || []), ...contactData.tags])];
+        }
+        if (contactData.custom_fields) {
+          updates.custom_fields = { ...(existing.custom_fields || {}), ...contactData.custom_fields };
+        }
+
         const { data, error } = await supabase
           .from('contacts')
-          .update({
-            last_call_id: callId,
-            last_contact: new Date().toISOString(),
-            total_calls: (existing.total_calls || 0) + 1,
-            updated_at: new Date().toISOString(),
-            name: metadata.name || existing.name,
-            email: metadata.email || existing.email,
-            notes: metadata.notes || existing.notes,
-            tags: metadata.tags || existing.tags,
-            custom_fields: metadata.customFields || existing.custom_fields,
-            agent_id: agentId
-          })
+          .update(updates)
           .eq('id', existing.id)
           .select()
           .single();
+        
         if (error) throw error;
-        console.log(`✅ Updated contact ${phoneNumber} for user ${userId}`);
+        console.log(`✅ Updated contact ${phoneNumber} for user ${effectiveUserId}`);
         return data;
       } else {
         // Create new contact
         const { data, error } = await supabase
           .from('contacts')
           .insert({
-            user_id: userId,
-            phone_number: phoneNumber,
+            ...contactData,
             first_call_id: callId,
             last_call_id: callId,
             first_contact: new Date().toISOString(),
             last_contact: new Date().toISOString(),
             total_calls: 1,
-            name: metadata.name || null,
-            email: metadata.email || null,
-            notes: metadata.notes || null,
-            tags: metadata.tags || ['voice-call'],
-            custom_fields: metadata.customFields || {},
             created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            agent_id: agentId
+            updated_at: new Date().toISOString()
           })
           .select()
           .single();
+        
         if (error) throw error;
         console.log(`✅ Created new contact ${phoneNumber} for user ${userId}`);
         return data;
@@ -944,7 +1042,7 @@ fastify.get('/api/contacts/:contactId/calls', { preHandler: [requireUser] }, asy
     reply.status(500).send({ error: 'Failed to fetch contact calls' });
   }
 });
- 
+
 function calculateDuration(startTime, endTime) {
   if (!startTime || !endTime) return null;
   const start = new Date(startTime);
@@ -960,42 +1058,27 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
     const calledNumber = request.body.To;
     let agentId = request.params.agentId || 'default';
     let userId = request.query.userId || null;
-    
-    console.log(`\n📞 [INCOMING-CALL] Received call to: ${calledNumber}, Initial userId: ${userId}, Initial agentId: ${agentId}`);
-    
     if (supabase && calledNumber) {
       try {
-        console.log(`🔍 [PHONE-LOOKUP] Querying phone_numbers table for: ${calledNumber}`);
-        const { data: phoneData, error } = await supabase
+        const { data: phoneAssignment, error } = await supabase
           .from('phone_numbers')
           .select('user_id, assigned_agent_id')
           .eq('phone_number', calledNumber)
           .maybeSingle();
-        
-        if (!error && phoneData) {
-          userId = phoneData.user_id;
-          if (phoneData.assigned_agent_id) {
-            agentId = phoneData.assigned_agent_id;
-          }
-          console.log(`✅ [PHONE-LOOKUP] SUCCESS - Found phone assignment: User ${userId}, Agent ${agentId}`);
+        if (!error && phoneAssignment) {
+          userId = phoneAssignment.user_id;
+          agentId = phoneAssignment.assigned_agent_id || 'default';
+          console.log(`✅ Found phone assignment: User ${userId}, Agent ${agentId}`);
         } else if (error) {
-          console.error(`❌ [PHONE-LOOKUP] Database error:`, error);
+          console.error('Supabase query error:', error);
         } else {
-          console.log(`⚠️ [PHONE-LOOKUP] No phone record found for ${calledNumber}, using defaults`);
+          console.log(`⚠️ No phone number assignment found for ${calledNumber}, using defaults`);
         }
       } catch (error) {
-        console.error(`❌ [PHONE-LOOKUP] Exception:`, error);
-      }
-    } else {
-      if (!supabase) {
-        console.warn(`⚠️ [PHONE-LOOKUP] Supabase not initialized`);
-      }
-      if (!calledNumber) {
-        console.warn(`⚠️ [PHONE-LOOKUP] No calledNumber provided`);
+        console.error('Error querying agent assignment:', error);
       }
     }
-    
-    console.log(`📋 [FINAL-STATE] calledNumber=${calledNumber}, agentId=${agentId}, userId=${userId}`);
+    console.log(`DEBUG: Incoming call - calledNumber=${calledNumber}, agentId=${agentId}, userId=${userId}`);
     const config = getUserAgent(userId, agentId);
     console.log('=== INCOMING CALL WEBHOOK ===');
     console.log('Called Number:', calledNumber);
@@ -1034,8 +1117,6 @@ fastify.register(async (fastify) => {
     let streamSid = null;
     let callId = null;
     let twilioCallSid = null;
-    let callerNumber = null; // "From" number - who is calling
-    let calledNumber = null; // "To" number - which number was called
     let latestMediaTimestamp = 0;
     let lastAssistantItem = null;
     let markQueue = [];
@@ -1108,7 +1189,7 @@ fastify.register(async (fastify) => {
 
     try {
       conversationWs = initializeConversationWs();
-      transcriptionWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-4o-transcribe`, {
+      transcriptionWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
         headers: {
           'Authorization': `Bearer ${OPENAI_API_KEY}`,
           "OpenAI-Beta": "realtime=v1"
@@ -1340,46 +1421,8 @@ fastify.register(async (fastify) => {
                   phoneNumber: phoneNumber,
                   email: args.email,
                   callerType: args.callerType,
-                  callerId: callerNumber,
-                  calledNumber: calledNumber
+                  callerId: callerNumber
                 });
-                
-                // CRITICAL: Query Supabase to find which user owns the phone number that was called
-                let contactUserId = userId; // Start with userId from URL params if available
-                if (!contactUserId && calledNumber && calledNumber !== 'Unknown' && supabase) {
-                  console.log(`🔍 Querying phone_numbers table for called number: ${calledNumber}`);
-                  const { data: phoneData, error: phoneError } = await supabase
-                    .from('phone_numbers')
-                    .select('user_id')
-                    .eq('phone_number', calledNumber)
-                    .maybeSingle();
-                  
-                  if (phoneError) {
-                    console.error('Error querying phone_numbers:', phoneError);
-                  } else if (phoneData) {
-                    contactUserId = phoneData.user_id;
-                    console.log(`✅ Found user_id ${contactUserId} for phone number ${calledNumber}`);
-                  } else {
-                    console.warn(`⚠️ No user found for phone number ${calledNumber}`);
-                  }
-                }
-                
-                if (!contactUserId) {
-                  console.error('❌ Cannot save contact: No user_id available. RLS policies will block the insert.');
-                  const functionOutput = { success: false, message: 'Unable to determine account owner for contact save' };
-                  if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
-                    conversationWs.send(JSON.stringify({
-                      type: 'conversation.item.create',
-                      item: {
-                        type: 'function_call_output',
-                        call_id: response.call_id,
-                        output: JSON.stringify(functionOutput)
-                      }
-                    }));
-                    conversationWs.send(JSON.stringify({ type: 'response.create' }));
-                  }
-                  return;
-                }
                 
                 const metadata = {
                   name: `${args.firstName} ${args.lastName}`,
@@ -1387,13 +1430,13 @@ fastify.register(async (fastify) => {
                   notes: args.notes || null,
                   tags: args.callerType ? [args.callerType, 'voice-call'] : ['voice-call']
                 };
-                const contact = await createOrUpdateContact(contactUserId, phoneNumber, callId, agentId, metadata);
+                const contact = await createOrUpdateContact(userId, phoneNumber, callId, agentId, metadata);
                 let functionOutput;
                 if (!contact) {
                   console.error('Failed to save contact to Supabase');
                   functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
                 } else {
-                  console.log(`✅ Contact saved: ${args.firstName} ${args.lastName} for user ${contactUserId}`);
+                  console.log(`✅ Contact saved: ${args.firstName} ${args.lastName}`);
                   functionOutput = { success: true, message: `Contact saved for ${args.firstName} ${args.lastName}` };
                 }
                 if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
@@ -1532,11 +1575,9 @@ fastify.register(async (fastify) => {
             streamSid = data.start.streamSid;
             callId = generateCallId();
             twilioCallSid = data.start.callSid;
-            callerNumber = data.start.customParameters?.From || data.start.callerNumber || 'Unknown';
-            calledNumber = data.start.customParameters?.To || 'Unknown';
             ACTIVE_CALL_SIDS[callId] = twilioCallSid;
-            console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, Twilio SID: ${twilioCallSid}, From: ${callerNumber}, To: ${calledNumber}, User: ${userId || 'global'}`);
-            createCallRecord(callId, streamSid, agentId, callerNumber, userId);
+            console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, Twilio SID: ${twilioCallSid}, User: ${userId || 'global'}`);
+            createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId);
             responseStartTimestampTwilio = null;
             latestMediaTimestamp = 0;
             break;
@@ -1554,7 +1595,7 @@ fastify.register(async (fastify) => {
       }
     });
 
-    connection.on('close', () => {
+    connection.on('close', async () => {
       console.log(`Client disconnected from media stream (user: ${userId || 'global'})`);
       if (callId) {
         const transcriptCount = TRANSCRIPT_STORAGE[callId]?.length || 0;
@@ -1563,6 +1604,21 @@ fastify.register(async (fastify) => {
           endTime: new Date().toISOString(),
           hasTranscript: transcriptCount > 0
         });
+        
+        // 🆕 AUTOMATIC CONTACT EXTRACTION FROM TRANSCRIPT
+        if (transcriptCount > 0 && userId) {
+          const callRecord = CALL_RECORDS.find(c => c.id === callId);
+          const callerNumber = callRecord?.callerNumber;
+          
+          if (callerNumber && callerNumber !== 'Unknown') {
+            console.log('🤖 Triggering automatic contact extraction...');
+            
+            // Run in background - don't block call cleanup
+            extractContactFromTranscript(callId, userId, callerNumber)
+              .catch(err => console.error('Background contact extraction failed:', err));
+          }
+        }
+        
         delete ACTIVE_CALL_SIDS[callId];
         console.log(`📞 Call ended: ${callId} - ${transcriptCount} transcript entries (user: ${userId || 'global'})`);
       }
@@ -1611,7 +1667,7 @@ const start = async () => {
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`🚀 Server is listening on port ${PORT}`);
     console.log('✅ Voice conversation system: ACTIVE');
-    console.log('✅ Real-time transcription: ACTIVE (gpt-4o-transcribe)');
+    console.log('✅ Real-time transcription: ACTIVE');
     console.log('✅ Dashboard APIs: ACTIVE');
     console.log('✅ Multi-user support: ACTIVE');
     console.log('✅ User data isolation: ACTIVE');
@@ -1621,30 +1677,10 @@ const start = async () => {
     console.log('✅ End call function: ACTIVE');
     console.log('✅ Save contact function: ACTIVE (Direct Supabase)');
     console.log('✅ CORS configuration: FIXED');
-    if (supabase && SUPABASE_SERVICE_ROLE_KEY) {
-      console.log('✅ Supabase integration: ACTIVE with SERVICE ROLE KEY');
-      console.log('   → Phone number lookups: ENABLED');
-      console.log('   → Contact creation: ENABLED');
-      console.log('   → RLS bypass: ENABLED');
-    } else if (supabase && SUPABASE_ANON_KEY) {
-      console.log('❌ Supabase integration: DEGRADED (using ANON KEY)');
-      console.log('   → Phone number lookups: WILL FAIL');
-      console.log('   → Contact creation: WILL FAIL');
-      console.log('   → Fix: Set SUPABASE_SERVICE_ROLE_KEY in Railway');
-    } else {
-      console.log('❌ Supabase integration: DISABLED (missing credentials)');
-    }
+    console.log('✅ Supabase integration:', supabase ? 'ACTIVE' : 'DISABLED (missing credentials)');
     console.log('✅ Twilio client:', twilioClient ? 'ACTIVE' : 'DISABLED (missing credentials)');
     console.log('✅ Non-blocking database operations: ACTIVE');
     console.log('✅ Call resilience improved: Database failures won\'t crash calls');
-    console.log('✅ Phone number lookup: ACTIVE (queries phone_numbers table)');
-    console.log('');
-    console.log('═══════════════════════════════════════════════════════════');
-    console.log('🔄 DEPLOYMENT VERSION MARKER: 2025-10-28-phone-lookup-v2');
-    console.log('   ✓ gpt-4o-transcribe model enabled');
-    console.log('   ✓ phone_numbers table queries active');
-    console.log('   ✓ user_id and assigned_agent_id retrieval working');
-    console.log('═══════════════════════════════════════════════════════════');
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);
