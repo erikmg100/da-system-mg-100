@@ -1606,15 +1606,19 @@ fastify.register(async (fastify) => {
         });
         
         // 🆕 AUTOMATIC CONTACT EXTRACTION FROM TRANSCRIPT
-        if (transcriptCount > 0 && userId) {
+        // Use effectiveUserId to ensure contact extraction even when userId is null
+        const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
+        const effectiveUserId = userId || SYSTEM_USER_ID;
+        
+        if (transcriptCount > 0) {
           const callRecord = CALL_RECORDS.find(c => c.id === callId);
           const callerNumber = callRecord?.callerNumber;
           
           if (callerNumber && callerNumber !== 'Unknown') {
-            console.log('🤖 Triggering automatic contact extraction...');
+            console.log(`🤖 Triggering automatic contact extraction for user ${effectiveUserId}...`);
             
             // Run in background - don't block call cleanup
-            extractContactFromTranscript(callId, userId, callerNumber)
+            extractContactFromTranscript(callId, effectiveUserId, callerNumber)
               .catch(err => console.error('Background contact extraction failed:', err));
           }
         }
