@@ -1201,17 +1201,12 @@ fastify.register(async (fastify) => {
       return;
     }
 
-    // Add connection health monitoring with active pings
+    // Add connection health monitoring (without invalid session.ping)
     const keepAliveInterval = setInterval(() => {
-      if (conversationWs?.readyState === WebSocket.OPEN) {
-        try {
-          conversationWs.send(JSON.stringify({ type: 'session.ping' }));
-        } catch (e) {
-          console.error('Keepalive failed:', e);
-        }
-      }
+      // ✅ FIXED: Removed unsupported session.ping that was causing OpenAI errors
+      // Monitor activity without sending unsupported ping
       if (Date.now() - lastActivity > 45000) {
-        console.warn('No activity for 45s - connection may be dead');
+        console.warn('⚠️ No activity for 45s - connection may be stale');
       }
     }, 15000);
 
@@ -1420,19 +1415,22 @@ fastify.register(async (fastify) => {
                   callerId: callerNumber
                 });
                 
+                // ✅ FIXED: Pass firstName and lastName separately (not combined as 'name')
                 const metadata = {
-                  name: `${args.firstName} ${args.lastName}`,
+                  firstName: args.firstName,
+                  lastName: args.lastName,
                   email: args.email || null,
                   notes: args.notes || null,
+                  callerType: args.callerType || 'unknown',
                   tags: args.callerType ? [args.callerType, 'voice-call'] : ['voice-call']
                 };
                 const contact = await createOrUpdateContact(userId, phoneNumber, callId, agentId, metadata);
                 let functionOutput;
                 if (!contact) {
-                  console.error('Failed to save contact to Supabase');
+                  console.error('❌ Failed to save contact to Supabase');
                   functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
                 } else {
-                  console.log(`✅ Contact saved: ${args.firstName} ${args.lastName}`);
+                  console.log(`✅ Contact saved successfully: ${args.firstName} ${args.lastName}`);
                   functionOutput = { success: true, message: `Contact saved for ${args.firstName} ${args.lastName}` };
                 }
                 if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
