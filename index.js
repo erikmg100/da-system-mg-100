@@ -34,27 +34,22 @@ let supabase = null;
 if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
   try {
     supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-      fetch: (url, options) => {
-        console.log('Supabase fetch:', url, options);
-        return fetch(url, options).catch(err => {
-          console.error('Supabase fetch error:', err.message, err.stack);
-          throw err;
-        });
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
       }
     });
     console.log('✅ Supabase client initialized with service role key');
+    console.log('   URL:', SUPABASE_URL);
   } catch (error) {
     console.error('Failed to initialize Supabase:', error);
   }
 } else if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   try {
     supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      fetch: (url, options) => {
-        console.log('Supabase fetch:', url, options);
-        return fetch(url, options).catch(err => {
-          console.error('Supabase fetch error:', err.message, err.stack);
-          throw err;
-        });
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
       }
     });
     console.warn('⚠️ Supabase initialized with anon key - some operations may fail due to RLS policies');
