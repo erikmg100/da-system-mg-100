@@ -1112,6 +1112,7 @@ fastify.register(async (fastify) => {
     let streamSid = null;
     let callId = null;
     let twilioCallSid = null;
+    let callerNumber = null; // Store caller number for later use
     let latestMediaTimestamp = 0;
     let lastAssistantItem = null;
     let markQueue = [];
@@ -1570,9 +1571,10 @@ fastify.register(async (fastify) => {
             streamSid = data.start.streamSid;
             callId = generateCallId();
             twilioCallSid = data.start.callSid;
+            callerNumber = data.start.callerNumber; // Store caller number for later use
             ACTIVE_CALL_SIDS[callId] = twilioCallSid;
-            console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, Twilio SID: ${twilioCallSid}, User: ${userId || 'global'}`);
-            createCallRecord(callId, streamSid, agentId, data.start.callerNumber, userId);
+            console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, Twilio SID: ${twilioCallSid}, Caller: ${callerNumber}, User: ${userId || 'global'}`);
+            createCallRecord(callId, streamSid, agentId, callerNumber, userId);
             responseStartTimestampTwilio = null;
             latestMediaTimestamp = 0;
             break;
