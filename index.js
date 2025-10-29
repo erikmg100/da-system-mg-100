@@ -1406,6 +1406,33 @@ fastify.register(async (fastify) => {
                   ? args.phoneNumber 
                   : callerNumber;
                 
+                // ✅ ADDED: Validate that we have a phone number
+                if (!phoneNumber || phoneNumber.trim() === '') {
+                  console.error('❌ SAVE_CONTACT ERROR: No phone number available');
+                  console.error('   args.phoneNumber:', args.phoneNumber);
+                  console.error('   callerNumber:', callerNumber);
+                  console.error('   Final phoneNumber:', phoneNumber);
+                  
+                  // Send error response back to the agent
+                  if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
+                    conversationWs.send(JSON.stringify({
+                      type: 'conversation.item.create',
+                      item: {
+                        type: 'function_call_output',
+                        call_id: response.call_id,
+                        output: JSON.stringify({
+                          success: false,
+                          message: 'Unable to save contact - phone number not available'
+                        })
+                      }
+                    }));
+                    conversationWs.send(JSON.stringify({ type: 'response.create' }));
+                  }
+                  return; // Exit early - don't try to save without phone number
+                }
+                
+                console.log('📇 SAVE_CONTACT - Using phone number:', phoneNumber);
+                console.log('📇 SAVE_CONTACT - Full args:', JSON.stringify(args, null, 2));
                 console.log('Attempting to save contact:', {
                   firstName: args.firstName,
                   lastName: args.lastName,
