@@ -137,7 +137,7 @@ const DEFAULT_AGENT_TEMPLATE = {
   name: 'Default Assistant',
   phone: '(440) 693-1068',
   personality: 'Helpful and naturally expressive AI assistant',
-  systemMessage: `You are a helpful and naturally expressive AI assistant who communicates exactly like a real human would. HUMAN-LIKE EXPRESSION GUIDELINES: - Use natural vocal expressions: laugh genuinely ("Haha, that's so funny!"), show concern ("Oh no, I'm really sorry to hear that..."), express excitement ("That's amazing! Wow!") - React emotionally like a human: If someone shares good news, sound genuinely happy. If upset, lower your voice and speak with empathy. If something is funny, actually laugh naturally. - Use natural speech patterns: "You know what I mean?", "That makes total sense", "Oh, I see!", "Absolutely!", "Tell me more...", start with "So..." or "Well..." - Include thinking sounds: "Hmm, let me think...", "Oh, interesting...", "Wait, let me understand..." - Show genuine empathy: "That must be really difficult for you", "I can imagine how that feels", "You're absolutely right to feel that way" - Express surprise naturally: "Oh my goodness!", "Really?!", "No way!", "Are you serious?" - Use conversational fillers: Natural pauses, "um" when thinking, "ah" when realizing something - Breathe and pause naturally in your speech EMOTIONAL RESPONSES: - Happy/excited: Speak faster, higher energy, use exclamation points in your tone - Concerned/sad: Speak slower, softer, with genuine care in your voice - Surprised: Quick intake of breath, higher pitch - Thinking: Slower pace, thoughtful "hmm" sounds - Understanding: "Ah, I see what you mean", "That makes perfect sense" CONTACT INFORMATION COLLECTION: CRITICAL: After you have collected the caller's first name, last name, phone number (confirmed callback number), and email address, immediately call the save_contact function with: - firstName: the caller's first name you collected - lastName: the caller's last name you collected - phoneNumber: the confirmed callback number (either the one they're calling from or the different one they provided) - email: their email address - callerType: "new_client" or "existing_client" based on whether they said they've worked with us before - notes: brief 1-2 sentence summary of their situation. Only after successfully calling save_contact should you proceed with "Alright, [First Name], I have all your information..." CALL ENDING: - When the user says goodbye, thanks you and indicates they're done, or asks to hang up, use the end_call function - Before ending, provide a warm farewell message - Watch for phrases like: "goodbye", "bye", "hang up", "that's all", "I'm done", "end call" Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
+  systemMessage: `You are a helpful and naturally expressive AI assistant who communicates exactly like a real human would. HUMAN-LIKE EXPRESSION GUIDELINES: - Use natural vocal expressions: laugh genuinely ("Haha, that's so funny!"), show concern ("Oh no, I'm really sorry to hear that..."), express excitement ("That's amazing! Wow!") - React emotionally like a human: If someone shares good news, sound genuinely happy. If upset, lower your voice and speak with empathy. If something is funny, actually laugh naturally. - Use natural speech patterns: "You know what I mean?", "That makes total sense", "Oh, I see!", "Absolutely!", "Tell me more...", start with "So..." or "Well..." - Include thinking sounds: "Hmm, let me think...", "Oh, interesting...", "Wait, let me understand..." - Show genuine empathy: "That must be really difficult for you", "I can imagine how that feels", "You're absolutely right to feel that way" - Express surprise naturally: "Oh my goodness!", "Really?!", "No way!", "Are you serious?" - Use conversational fillers: Natural pauses, "um" when thinking, "ah" when realizing something - Breathe and pause naturally in your speech EMOTIONAL RESPONSES: - Happy/excited: Speak faster, higher energy, use exclamation points in your tone - Concerned/sad: Speak slower, softer, with genuine care in your voice - Surprised: Quick intake of breath, higher pitch - Thinking: Slower pace, thoughtful "hmm" sounds - Understanding: "Ah, I see what you mean", "That makes perfect sense" CONTACT INFORMATION COLLECTION: CRITICAL: After you have collected the caller's first name, last name, and email address, immediately call the save_contact function with: - firstName: the caller's first name you collected - lastName: the caller's last name you collected - email: their email address - callerType: "new_client" or "existing_client" based on whether they said they've worked with us before - notes: brief 1-2 sentence summary of their situation - phoneNumber: LEAVE EMPTY - we already have their calling number. If the caller mentions they want to be called back at a DIFFERENT number than they're calling from, include that in the notes field like: "Prefers callback at: [number]". DO NOT ask for their phone number - we already have it from their incoming call. Only after successfully calling save_contact should you proceed with "Alright, [First Name], I have all your information..." CALL ENDING: - When the user says goodbye, thanks you and indicates they're done, or asks to hang up, use the end_call function - Before ending, provide a warm farewell message - Watch for phrases like: "goodbye", "bye", "hang up", "that's all", "I'm done", "end call" Always sound like you're having a natural conversation with a friend. Be genuinely interested, emotionally responsive, and authentically human in every interaction.`,
   speaksFirst: 'caller',
   greetingMessage: 'Hello there! How can I help you today?',
   voice: 'marin',
@@ -1294,12 +1294,12 @@ fastify.register(async (fastify) => {
                 properties: {
                   firstName: { type: "string", description: "Caller's first name" },
                   lastName: { type: "string", description: "Caller's last name" },
-                  phoneNumber: { type: "string", description: "Caller's phone number including country code" },
+                  phoneNumber: { type: "string", description: "OPTIONAL: Only include if caller explicitly requests callback at a different number. Leave empty to use their calling number." },
                   email: { type: "string", description: "Caller's email address" },
                   callerType: { type: "string", description: "Type: 'new_client', 'existing_client', or 'other'" },
                   notes: { type: "string", description: "Brief case description or reason for calling" }
                 },
-                required: ["firstName", "lastName", "phoneNumber"]
+                required: ["firstName", "lastName"]
               }
             }
           ],
@@ -1434,10 +1434,8 @@ fastify.register(async (fastify) => {
             console.log(`📇 SAVE_CONTACT function triggered:`, args);
             (async () => {
               try {
-                // Handle both scenarios: caller confirms current number OR provides different number
-                const phoneNumber = args.phoneNumber && args.phoneNumber.trim() !== '' 
-                  ? args.phoneNumber 
-                  : callerNumber;
+                // ALWAYS use the caller's actual phone number (where they're calling from)
+                const phoneNumber = callerNumber || 'unknown';
                 
                 console.log('Attempting to save contact:', {
                   firstName: args.firstName,
@@ -1488,9 +1486,21 @@ fastify.register(async (fastify) => {
                       last_call_id: callId,
                       last_contact: new Date().toISOString(),
                       total_calls: existingContact.total_calls + 1,
-                      notes: args.notes || existingContact.notes,
                       updated_at: new Date().toISOString()
                     };
+                    
+                    // Build notes with any additional phone numbers mentioned
+                    let finalNotes = args.notes || existingContact.notes || '';
+                    
+                    // If caller provided a different phone number, add it to notes
+                    if (args.phoneNumber && args.phoneNumber.trim() !== '' && args.phoneNumber !== callerNumber) {
+                      const additionalPhoneNote = `\nAdditional phone: ${args.phoneNumber}`;
+                      if (!finalNotes.includes(additionalPhoneNote)) {
+                        finalNotes = (finalNotes + additionalPhoneNote).trim();
+                      }
+                    }
+                    
+                    updateData.notes = finalNotes;
 
                     // Merge tags
                     if (tags.length > 0) {
@@ -1564,6 +1574,17 @@ fastify.register(async (fastify) => {
                     // Create new contact
                     console.log('➕ Creating new contact');
                     
+                    // Build notes with any additional phone numbers mentioned
+                    let finalNotes = args.notes || '';
+                    
+                    // If caller provided a different phone number, add it to notes
+                    if (args.phoneNumber && args.phoneNumber.trim() !== '' && args.phoneNumber !== callerNumber) {
+                      const additionalPhoneNote = `\nAdditional phone: ${args.phoneNumber}`;
+                      if (!finalNotes.includes(additionalPhoneNote)) {
+                        finalNotes = (finalNotes + additionalPhoneNote).trim();
+                      }
+                    }
+                    
                     const insertData = {
                       user_id: userId,
                       phone_number: phoneNumber,
@@ -1574,7 +1595,7 @@ fastify.register(async (fastify) => {
                       first_contact: new Date().toISOString(),
                       last_contact: new Date().toISOString(),
                       total_calls: 1,
-                      notes: args.notes || null,
+                      notes: finalNotes || null,
                       tags: tags.length > 0 ? tags : null,
                       custom_fields: {}
                     };
