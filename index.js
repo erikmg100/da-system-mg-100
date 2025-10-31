@@ -1103,6 +1103,7 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
       }
     }
     console.log(`DEBUG: Incoming call - calledNumber=${calledNumber}, callerNumber=${callerNumber}, agentId=${agentId}, userId=${userId}`);
+    console.log(`DEBUG: Phone lookup successful: ${userId ? 'YES' : 'NO - WILL USE FALLBACK CONTACT SEARCH'}`);
     const config = getUserAgent(userId, agentId);
     console.log('=== INCOMING CALL WEBHOOK ===');
     console.log('Called Number:', calledNumber);
@@ -1471,12 +1472,42 @@ fastify.register(async (fastify) => {
 
                   // Check if contact already exists
                   console.log('🔍 Checking for existing contact:', { userId, phoneNumber });
-                  const { data: existingContact, error: selectError } = await supabase
-                    .from('contacts')
-                    .select('*')
-                    .eq('user_id', userId)
-                    .eq('phone_number', phoneNumber)
-                    .maybeSingle();
+
+                  let existingContact = null;
+                  let selectError = null;
+
+                  // First try: Search with userId if available
+                  if (userId) {
+                    const result = await supabase
+                      .from('contacts')
+                      .select('*')
+                      .eq('user_id', userId)
+                      .eq('phone_number', phoneNumber)
+                      .maybeSingle();
+                    
+                    existingContact = result.data;
+                    selectError = result.error;
+                  }
+
+                  // Second try: If userId is null or no contact found, search by phone alone
+                  // This handles the case where userId lookup failed but contact exists
+                  if (!existingContact && !selectError) {
+                    console.log('🔍 Fallback: Searching for contact by phone number alone');
+                    const result = await supabase
+                      .from('contacts')
+                      .select('*')
+                      .eq('phone_number', phoneNumber)
+                      .maybeSingle();
+                    
+                    existingContact = result.data;
+                    selectError = result.error;
+                    
+                    // If we found a contact this way, use its user_id for the update
+                    if (existingContact) {
+                      console.log(`✅ Found existing contact via phone lookup: ${existingContact.id} (user: ${existingContact.user_id})`);
+                      userId = existingContact.user_id; // Use the contact's user_id for consistency
+                    }
+                  }
 
                   if (selectError) {
                     console.error('❌ Error checking for existing contact:', selectError);
