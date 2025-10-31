@@ -177,24 +177,51 @@ const LOG_EVENT_TYPES = [
 const SHOW_TIMING_MATH = process.env.SHOW_TIMING_MATH === 'true';
 
 // IMPROVED: Non-blocking Supabase operation wrapper with detailed error logging
-async function safeSupabaseOperation(operation, operationName = 'Supabase operation') {
-  try {
-    if (!supabase) {
-      console.log(`⚠️ ${operationName}: Supabase not initialized, skipping`);
-      return { success: false, error: 'Supabase not initialized' };
+async function safeSupabaseOperation(operation, operationName = 'Supabase operation', retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      if (!supabase) {
+        console.log(`⚠️ ${operationName}: Supabase not initialized, skipping`);
+        return { success: false, error: 'Supabase not initialized' };
+      }
+     
+      console.log(`🔄 ${operationName}: Attempt ${attempt}/${retries}`);
+      const result = await operation();
+      console.log(`✅ ${operationName}: Success on attempt ${attempt}`);
+      return { success: true, data: result };
+    } catch (error) {
+      const isLastAttempt = attempt === retries;
+      const errorDetails = {
+        attempt: `${attempt}/${retries}`,
+        message: error.message,
+        code: error.code || 'unknown',
+        hint: error.hint || 'none',
+        name: error.name || 'Error',
+        cause: error.cause ? String(error.cause) : 'none',
+        type: error.constructor.name
+      };
+
+      // Special handling for network errors
+      if (error.message?.includes('fetch failed') || error.cause?.code === 'ENOTFOUND') {
+        errorDetails.networkError = true;
+        errorDetails.possibleCauses = [
+          'Railway cannot reach Supabase',
+          'DNS resolution failure',
+          'Network connectivity issue',
+          'Check SUPABASE_URL environment variable'
+        ];
+      }
+
+      console.error(`❌ ${operationName} failed:`, errorDetails);
+
+      if (!isLastAttempt) {
+        const delayMs = Math.pow(2, attempt) * 1000; // Exponential backoff: 2s, 4s, 8s
+        console.log(`⏳ Retrying in ${delayMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      } else {
+        return { success: false, error: error.message, details: errorDetails };
+      }
     }
-   
-    const result = await operation();
-    console.log(`✅ ${operationName}: Success`);
-    return { success: true, data: result };
-  } catch (error) {
-    console.error(`❌ ${operationName} failed (non-blocking):`, {
-      message: error.message,
-      code: error.code || 'unknown',
-      hint: error.hint || 'none',
-      stack: error.stack || 'no stack trace'
-    });
-    return { success: false, error: error.message };
   }
 }
 
@@ -375,7 +402,8 @@ async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metad
     phoneNumber,
     callId,
     agentId,
-    metadata
+    metadata,
+    timestamp: new Date().toISOString()
   });
 
   const result = await safeSupabaseOperation(
@@ -1201,12 +1229,17 @@ fastify.register(async (fastify) => {
       return;
     }
 
-    // Add connection health monitoring (without invalid session.ping)
+    // Add connection health monitoring with active pings
     const keepAliveInterval = setInterval(() => {
-      // ✅ FIXED: Removed unsupported session.ping that was causing OpenAI errors
-      // Monitor activity without sending unsupported ping
+      if (conversationWs?.readyState === WebSocket.OPEN) {
+        try {
+          conversationWs.send(JSON.stringify({ type: 'session.ping' }));
+        } catch (e) {
+          console.error('Keepalive failed:', e);
+        }
+      }
       if (Date.now() - lastActivity > 45000) {
-        console.warn('⚠️ No activity for 45s - connection may be stale');
+        console.warn('No activity for 45s - connection may be dead');
       }
     }, 15000);
 
@@ -1406,33 +1439,6 @@ fastify.register(async (fastify) => {
                   ? args.phoneNumber 
                   : callerNumber;
                 
-                // ✅ ADDED: Validate that we have a phone number
-                if (!phoneNumber || phoneNumber.trim() === '') {
-                  console.error('❌ SAVE_CONTACT ERROR: No phone number available');
-                  console.error('   args.phoneNumber:', args.phoneNumber);
-                  console.error('   callerNumber:', callerNumber);
-                  console.error('   Final phoneNumber:', phoneNumber);
-                  
-                  // Send error response back to the agent
-                  if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
-                    conversationWs.send(JSON.stringify({
-                      type: 'conversation.item.create',
-                      item: {
-                        type: 'function_call_output',
-                        call_id: response.call_id,
-                        output: JSON.stringify({
-                          success: false,
-                          message: 'Unable to save contact - phone number not available'
-                        })
-                      }
-                    }));
-                    conversationWs.send(JSON.stringify({ type: 'response.create' }));
-                  }
-                  return; // Exit early - don't try to save without phone number
-                }
-                
-                console.log('📇 SAVE_CONTACT - Using phone number:', phoneNumber);
-                console.log('📇 SAVE_CONTACT - Full args:', JSON.stringify(args, null, 2));
                 console.log('Attempting to save contact:', {
                   firstName: args.firstName,
                   lastName: args.lastName,
@@ -1442,22 +1448,31 @@ fastify.register(async (fastify) => {
                   callerId: callerNumber
                 });
                 
-                // ✅ FIXED: Pass firstName and lastName separately (not combined as 'name')
                 const metadata = {
                   firstName: args.firstName,
                   lastName: args.lastName,
                   email: args.email || null,
                   notes: args.notes || null,
-                  callerType: args.callerType || 'unknown',
+                  callerType: args.callerType,
                   tags: args.callerType ? [args.callerType, 'voice-call'] : ['voice-call']
                 };
                 const contact = await createOrUpdateContact(userId, phoneNumber, callId, agentId, metadata);
                 let functionOutput;
                 if (!contact) {
-                  console.error('❌ Failed to save contact to Supabase');
+                  console.error('❌ Failed to save contact to Supabase:', {
+                    firstName: args.firstName,
+                    lastName: args.lastName,
+                    phoneNumber: phoneNumber,
+                    userId: userId
+                  });
                   functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
                 } else {
-                  console.log(`✅ Contact saved successfully: ${args.firstName} ${args.lastName}`);
+                  console.log(`✅ Contact saved successfully:`, {
+                    id: contact.id,
+                    name: contact.name,
+                    phone: contact.phone_number,
+                    email: contact.email
+                  });
                   functionOutput = { success: true, message: `Contact saved for ${args.firstName} ${args.lastName}` };
                 }
                 if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
