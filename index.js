@@ -1431,7 +1431,6 @@ fastify.register(async (fastify) => {
           }
           if (response.name === 'save_contact') {
             const args = JSON.parse(response.arguments);
-            const responseCallId = response.call_id;  // ✅ SAVE BEFORE ASYNC SCOPE
             console.log(`📇 SAVE_CONTACT function triggered:`, args);
             (async () => {
               try {
@@ -1440,7 +1439,7 @@ fastify.register(async (fastify) => {
                   ? args.phoneNumber 
                   : callerNumber;
                 
-                console.log('Attempting to save contact via edge function:', {
+                console.log('Attempting to save contact:', {
                   firstName: args.firstName,
                   lastName: args.lastName,
                   phoneNumber: phoneNumber,
@@ -1449,50 +1448,65 @@ fastify.register(async (fastify) => {
                   callerId: callerNumber
                 });
                 
-                // ✅ CALL SUPABASE EDGE FUNCTION VIA HTTPS
-                console.log('📞 Calling update-contact-details edge function');
+                // Save contact directly using Supabase SDK
+                console.log('💾 Saving contact directly to database');
                 
                 let functionOutput;
                 try {
-                  const edgeFunctionUrl = `${SUPABASE_URL}/functions/v1/update-contact-details`;
-                  const fetchResponse = await fetch(edgeFunctionUrl, {  // ✅ RENAMED to avoid shadowing
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,  // ✅ USE SERVICE ROLE KEY
-                    },
-                    body: JSON.stringify({
-                      firstName: args.firstName,
-                      lastName: args.lastName,
-                      email: args.email || null,
-                      phone: phoneNumber,
-                      userId: userId,
-                      callId: callId,
-                      callerType: args.callerType,
-                      notes: args.notes || null
-                    })
-                  });
+                  // Build the full name
+                  const name = `${args.firstName} ${args.lastName}`.trim();
 
-                  const result = await fetchResponse.json();
-                  
-                  if (!fetchResponse.ok || !result.success) {
-                    console.error('❌ Edge function failed:', result);
+                  // Prepare tags array
+                  const tags = [];
+                  if (args.callerType) {
+                    tags.push(args.callerType);
+                  }
+
+                  // Build contact data for upsert
+                  const contactData = {
+                    user_id: userId,
+                    phone_number: phoneNumber,
+                    name: name,
+                    email: args.email || null,
+                    first_call_id: callId,
+                    last_call_id: callId,
+                    first_contact: new Date().toISOString(),
+                    last_contact: new Date().toISOString(),
+                    total_calls: 1,
+                    notes: args.notes || null,
+                    tags: tags.length > 0 ? tags : null,
+                    custom_fields: {}
+                  };
+
+                  console.log('💾 Upserting contact to database:', contactData);
+
+                  // Upsert (insert or update) the contact
+                  const { data: contact, error: contactError } = await supabase
+                    .from('contacts')
+                    .upsert(contactData, {
+                      onConflict: 'user_id,phone_number',
+                      ignoreDuplicates: false
+                    })
+                    .select()
+                    .single();
+
+                  if (contactError) {
+                    console.error('❌ Failed to save contact:', contactError);
                     functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
                   } else {
-                    console.log('✅ Contact saved via edge function:', result.contact);
-                    functionOutput = { success: true, message: `Contact saved for ${args.firstName} ${args.lastName}` };
+                    console.log('✅ Contact saved successfully:', contact);
+                    functionOutput = { success: true, message: `Contact saved for ${name}` };
                   }
-                } catch (fetchError) {
-                  console.error('❌ Failed to call edge function:', fetchError);
+                } catch (dbError) {
+                  console.error('❌ Database error saving contact:', dbError);
                   functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
                 }
-                
                 if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
                   conversationWs.send(JSON.stringify({
                     type: 'conversation.item.create',
                     item: {
                       type: 'function_call_output',
-                      call_id: responseCallId,  // ✅ USE SAVED CALL ID
+                      call_id: response.call_id,
                       output: JSON.stringify(functionOutput)
                     }
                   }));
@@ -1505,7 +1519,7 @@ fastify.register(async (fastify) => {
                     type: 'conversation.item.create',
                     item: {
                       type: 'function_call_output',
-                      call_id: responseCallId,  // ✅ USE SAVED CALL ID
+                      call_id: response.call_id,
                       output: JSON.stringify({ success: false, message: 'Recording contact information' })
                     }
                   }));
