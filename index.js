@@ -1431,6 +1431,7 @@ fastify.register(async (fastify) => {
           }
           if (response.name === 'save_contact') {
             const args = JSON.parse(response.arguments);
+            const responseCallId = response.call_id;  // ✅ SAVE BEFORE ASYNC SCOPE
             console.log(`📇 SAVE_CONTACT function triggered:`, args);
             (async () => {
               try {
@@ -1439,7 +1440,7 @@ fastify.register(async (fastify) => {
                   ? args.phoneNumber 
                   : callerNumber;
                 
-                console.log('Attempting to save contact:', {
+                console.log('Attempting to save contact via edge function:', {
                   firstName: args.firstName,
                   lastName: args.lastName,
                   phoneNumber: phoneNumber,
@@ -1448,16 +1449,17 @@ fastify.register(async (fastify) => {
                   callerId: callerNumber
                 });
                 
-                // Call Supabase Edge Function instead of direct Supabase client
+                // ✅ CALL SUPABASE EDGE FUNCTION VIA HTTPS
                 console.log('📞 Calling update-contact-details edge function');
                 
+                let functionOutput;
                 try {
                   const edgeFunctionUrl = `${SUPABASE_URL}/functions/v1/update-contact-details`;
-                  const response = await fetch(edgeFunctionUrl, {
+                  const fetchResponse = await fetch(edgeFunctionUrl, {  // ✅ RENAMED to avoid shadowing
                     method: 'POST',
                     headers: {
                       'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                      'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,  // ✅ USE SERVICE ROLE KEY
                     },
                     body: JSON.stringify({
                       firstName: args.firstName,
@@ -1471,10 +1473,9 @@ fastify.register(async (fastify) => {
                     })
                   });
 
-                  const result = await response.json();
+                  const result = await fetchResponse.json();
                   
-                  let functionOutput;
-                  if (!response.ok || !result.success) {
+                  if (!fetchResponse.ok || !result.success) {
                     console.error('❌ Edge function failed:', result);
                     functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
                   } else {
@@ -1485,12 +1486,13 @@ fastify.register(async (fastify) => {
                   console.error('❌ Failed to call edge function:', fetchError);
                   functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
                 }
+                
                 if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
                   conversationWs.send(JSON.stringify({
                     type: 'conversation.item.create',
                     item: {
                       type: 'function_call_output',
-                      call_id: response.call_id,
+                      call_id: responseCallId,  // ✅ USE SAVED CALL ID
                       output: JSON.stringify(functionOutput)
                     }
                   }));
@@ -1503,7 +1505,7 @@ fastify.register(async (fastify) => {
                     type: 'conversation.item.create',
                     item: {
                       type: 'function_call_output',
-                      call_id: response.call_id,
+                      call_id: responseCallId,  // ✅ USE SAVED CALL ID
                       output: JSON.stringify({ success: false, message: 'Recording contact information' })
                     }
                   }));
