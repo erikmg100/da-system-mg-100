@@ -1079,6 +1079,7 @@ function calculateDuration(startTime, endTime) {
 fastify.all('/incoming-call/:agentId?', async (request, reply) => {
   try {
     const calledNumber = request.body.To;
+    const callerNumber = request.body.From; // Extract caller's phone number
     let agentId = request.params.agentId || 'default';
     let userId = request.query.userId || null;
     if (supabase && calledNumber) {
@@ -1101,17 +1102,20 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
         console.error('Error querying agent assignment:', error);
       }
     }
-    console.log(`DEBUG: Incoming call - calledNumber=${calledNumber}, agentId=${agentId}, userId=${userId}`);
+    console.log(`DEBUG: Incoming call - calledNumber=${calledNumber}, callerNumber=${callerNumber}, agentId=${agentId}, userId=${userId}`);
     const config = getUserAgent(userId, agentId);
     console.log('=== INCOMING CALL WEBHOOK ===');
     console.log('Called Number:', calledNumber);
+    console.log('Caller Number:', callerNumber);
     console.log('Agent ID:', agentId);
     console.log('User ID:', userId || 'global');
     console.log('Agent Name:', config.name);
     console.log('===============================');
+    // Pass caller number to WebSocket URL
+    const encodedCallerNumber = encodeURIComponent(callerNumber || 'Unknown');
     const websocketUrl = userId
-      ? `wss://${request.headers.host}/media-stream/${agentId}/${userId}`
-      : `wss://${request.headers.host}/media-stream/${agentId}`;
+      ? `wss://${request.headers.host}/media-stream/${agentId}/${userId}?from=${encodedCallerNumber}`
+      : `wss://${request.headers.host}/media-stream/${agentId}?from=${encodedCallerNumber}`;
     const twimlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
@@ -1129,18 +1133,23 @@ fastify.register(async (fastify) => {
   fastify.get('/media-stream/:agentId/:userId?', { websocket: true }, (connection, req) => {
     const agentId = req.params.agentId || 'default';
     let userId = req.params.userId || null;
+    
+    // Extract caller number from query params (passed from /incoming-call)
+    const urlParams = new URLSearchParams(req.url.split('?')[1]);
+    let callerNumber = urlParams.get('from') || null;
+    
     console.log(`DEBUG: WebSocket URL: ${req.url}`);
-    console.log(`DEBUG: URL params - agentId: ${agentId}, userId: ${userId}`);
+    console.log(`DEBUG: URL params - agentId: ${agentId}, userId: ${userId}, callerNumber: ${callerNumber}`);
     let agentConfig = getUserAgent(userId, agentId);
     console.log(`=== WEBSOCKET CONNECTION ===`);
     console.log(`Client connected for agent: ${agentId} (user: ${userId || 'global'})`);
+    console.log(`Caller Number from URL: ${callerNumber}`);
     console.log(`Using agent: ${agentConfig.name}`);
     console.log(`System prompt: ${agentConfig.systemMessage.substring(0, 100)}...`);
     console.log(`============================`);
     let streamSid = null;
     let callId = null;
     let twilioCallSid = null;
-    let callerNumber = null; // Store caller number for later use
     let latestMediaTimestamp = 0;
     let lastAssistantItem = null;
     let markQueue = [];
@@ -1801,9 +1810,11 @@ fastify.register(async (fastify) => {
             streamSid = data.start.streamSid;
             callId = generateCallId();
             twilioCallSid = data.start.callSid;
-            // Twilio sends caller number in customParameters.From
-            callerNumber = data.start.customParameters?.From || data.start.callerNumber || 'Unknown';
-            console.log('📞 Extracted caller number:', callerNumber);
+            // Use callerNumber from URL params (already set above), fallback to customParameters
+            if (!callerNumber || callerNumber === 'Unknown') {
+              callerNumber = data.start.customParameters?.From || data.start.callerNumber || 'Unknown';
+            }
+            console.log('📞 Final caller number for call record:', callerNumber);
             ACTIVE_CALL_SIDS[callId] = twilioCallSid;
             console.log(`📞 Call started - Agent: ${agentConfig.name}, Stream: ${streamSid}, Call: ${callId}, Twilio SID: ${twilioCallSid}, Caller: ${callerNumber}, User: ${userId || 'global'}`);
             createCallRecord(callId, streamSid, agentId, callerNumber, userId);
