@@ -1448,32 +1448,42 @@ fastify.register(async (fastify) => {
                   callerId: callerNumber
                 });
                 
-                const metadata = {
-                  firstName: args.firstName,
-                  lastName: args.lastName,
-                  email: args.email || null,
-                  notes: args.notes || null,
-                  callerType: args.callerType,
-                  tags: args.callerType ? [args.callerType, 'voice-call'] : ['voice-call']
-                };
-                const contact = await createOrUpdateContact(userId, phoneNumber, callId, agentId, metadata);
-                let functionOutput;
-                if (!contact) {
-                  console.error('❌ Failed to save contact to Supabase:', {
-                    firstName: args.firstName,
-                    lastName: args.lastName,
-                    phoneNumber: phoneNumber,
-                    userId: userId
+                // Call Supabase Edge Function instead of direct Supabase client
+                console.log('📞 Calling update-contact-details edge function');
+                
+                try {
+                  const edgeFunctionUrl = `${SUPABASE_URL}/functions/v1/update-contact-details`;
+                  const response = await fetch(edgeFunctionUrl, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                    },
+                    body: JSON.stringify({
+                      firstName: args.firstName,
+                      lastName: args.lastName,
+                      email: args.email || null,
+                      phone: phoneNumber,
+                      userId: userId,
+                      callId: callId,
+                      callerType: args.callerType,
+                      notes: args.notes || null
+                    })
                   });
+
+                  const result = await response.json();
+                  
+                  let functionOutput;
+                  if (!response.ok || !result.success) {
+                    console.error('❌ Edge function failed:', result);
+                    functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
+                  } else {
+                    console.log('✅ Contact saved via edge function:', result.contact);
+                    functionOutput = { success: true, message: `Contact saved for ${args.firstName} ${args.lastName}` };
+                  }
+                } catch (fetchError) {
+                  console.error('❌ Failed to call edge function:', fetchError);
                   functionOutput = { success: false, message: 'Contact info noted, will be saved manually' };
-                } else {
-                  console.log(`✅ Contact saved successfully:`, {
-                    id: contact.id,
-                    name: contact.name,
-                    phone: contact.phone_number,
-                    email: contact.email
-                  });
-                  functionOutput = { success: true, message: `Contact saved for ${args.firstName} ${args.lastName}` };
                 }
                 if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
                   conversationWs.send(JSON.stringify({
