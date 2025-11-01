@@ -1357,9 +1357,6 @@ fastify.register(async (fastify) => {
             },
           },
           instructions: agentConfig.systemMessage,
-          input_audio_transcription: {
-            model: "whisper-1"
-          },
           tools: [
             {
               type: "function",
