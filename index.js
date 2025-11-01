@@ -1326,15 +1326,8 @@ fastify.register(async (fastify) => {
       return;
     }
 
-    // Add connection health monitoring with active pings
+    // Add connection health monitoring (removed session.ping as it's no longer supported)
     const keepAliveInterval = setInterval(() => {
-      if (conversationWs?.readyState === WebSocket.OPEN) {
-        try {
-          conversationWs.send(JSON.stringify({ type: 'session.ping' }));
-        } catch (e) {
-          console.error('Keepalive failed:', e);
-        }
-      }
       if (Date.now() - lastActivity > 45000) {
         console.warn('No activity for 45s - connection may be dead');
       }
@@ -1353,6 +1346,9 @@ fastify.register(async (fastify) => {
           type: 'realtime',
           model: "gpt-realtime",
           output_modalities: ["audio"],
+          input_audio_transcription: {
+            model: "whisper-1"
+          },
           audio: {
             input: {
               format: { type: 'audio/pcmu' },
