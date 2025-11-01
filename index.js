@@ -398,7 +398,7 @@ async function extractContactFromTranscript(callId, userId, callerNumber) {
   }
 }
 
-// 🆕 Generate AI call summary and append to contact's call_summary field
+// 🤖 Generate AI call summary and append to contact's call_summary field
 async function generateCallSummaryForContact(contactId, transcript, extractedInfo, callerNumber, callId) {
   console.log(`🤖 Generating AI call summary for contact ${contactId}...`);
   
@@ -416,8 +416,13 @@ async function generateCallSummaryForContact(contactId, transcript, extractedInf
         email: extractedInfo.email,
         callerType: extractedInfo.callerType,
         callId: callId,
-        notes: extractedInfo.notes || transcript.substring(0, 500), // Use transcript excerpt if no notes
-        customFields: extractedInfo
+        notes: extractedInfo.notes || transcript, // Pass FULL transcript for detailed AI summary
+        transcript: transcript, // Add explicit transcript field with full conversation
+        customFields: {
+          ...extractedInfo,
+          hasTranscript: true,
+          transcriptLength: transcript.length
+        }
       })
     });
 
