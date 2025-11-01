@@ -171,7 +171,9 @@ const LOG_EVENT_TYPES = [
   'input_audio_buffer.speech_started',
   'session.created',
   'session.updated',
-  'response.function_call_arguments.done'
+  'response.function_call_arguments.done',
+  'conversation.item.input_audio_transcription.completed',
+  'response.audio_transcript.done'
 ];
 
 const SHOW_TIMING_MATH = process.env.SHOW_TIMING_MATH === 'true';
@@ -1815,6 +1817,25 @@ fastify.register(async (fastify) => {
         }
         if (response.type === 'input_audio_buffer.speech_started') {
           handleSpeechStartedEvent();
+        }
+
+        // Handle transcription events from OpenAI
+        if (response.type === 'conversation.item.input_audio_transcription.completed') {
+          console.log('📝 User transcription received:', response.transcript);
+          saveTranscriptEntry(callId, {
+            role: 'user',
+            text: response.transcript,
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        if (response.type === 'response.audio_transcript.done') {
+          console.log('🤖 Assistant transcription received:', response.transcript);
+          saveTranscriptEntry(callId, {
+            role: 'assistant',
+            text: response.transcript,
+            timestamp: new Date().toISOString()
+          });
         }
       } catch (error) {
         console.error('Error processing conversation message:', error);
