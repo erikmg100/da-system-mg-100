@@ -1346,9 +1346,6 @@ fastify.register(async (fastify) => {
           type: 'realtime',
           model: "gpt-realtime",
           output_modalities: ["audio"],
-          input_audio_transcription: {
-            model: "whisper-1"
-          },
           audio: {
             input: {
               format: { type: 'audio/pcmu' },
