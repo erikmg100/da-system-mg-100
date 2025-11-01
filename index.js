@@ -315,7 +315,7 @@ function calculateConfidence(logprobs) {
   return Math.exp(avgLogprob);
 }
 
-// 🆕 UNIVERSAL AUTOMATIC CONTACT EXTRACTION - ALWAYS CREATES CONTACT WITH AI SUMMARY
+// 🆕 UNIVERSAL AUTOMATIC CONTACT EXTRACTION
 async function extractContactFromTranscript(callId, userId, callerNumber) {
   console.log(`🔍 [extractContactFromTranscript] Starting for call ${callId}`);
   
@@ -327,7 +327,7 @@ async function extractContactFromTranscript(callId, userId, callerNumber) {
 
   // Build full transcript text
   const fullTranscript = transcript
-    .map(entry => `${entry.role}: ${entry.text}`)
+    .map(entry => `${entry.speaker}: ${entry.text}`)
     .join('\n');
 
   console.log('📝 Transcript for analysis:', fullTranscript.substring(0, 500) + '...');
@@ -361,107 +361,24 @@ async function extractContactFromTranscript(callId, userId, callerNumber) {
     
     console.log('✅ Extracted contact info:', extractedInfo);
 
-    // ALWAYS save contact, even if no name found - use "Unknown Caller"
-    if (!extractedInfo.firstName) {
-      extractedInfo.firstName = 'Unknown';
-      extractedInfo.lastName = 'Caller';
-      extractedInfo.notes = extractedInfo.notes || 'Caller did not provide name';
-      console.log('⚠️ No contact name found - using "Unknown Caller" placeholder');
-    }
-
-    // Save or update contact
-    const contact = await createOrUpdateContact(
-      userId,
-      callerNumber,
-      callId,
-      null, // agentId not needed for transcript extraction
-      extractedInfo
-    );
-
-    // ALWAYS generate AI summary for the contact
-    if (contact) {
-      console.log('🤖 Generating AI call summary for contact...');
-      await generateCallSummaryForContact(
-        contact.id,
-        fullTranscript,
-        extractedInfo,
+    // Only save if we at least got a name
+    if (extractedInfo.firstName) {
+      await createOrUpdateContact(
+        userId,
         callerNumber,
-        callId
+        callId,
+        null, // agentId not needed for transcript extraction
+        extractedInfo
       );
-      console.log('✅ Contact saved and AI summary generated');
+      console.log('✅ Contact automatically saved from transcript');
+      return extractedInfo;
+    } else {
+      console.log('⚠️ No contact name found in transcript - skipping save');
+      return null;
     }
-
-    return extractedInfo;
   } catch (error) {
     console.error('❌ Error extracting contact from transcript:', error);
     return null;
-  }
-}
-
-// 🆕 Generate AI call summary and append to contact's call_summary field
-async function generateCallSummaryForContact(contactId, transcript, extractedInfo, callerNumber, callId) {
-  console.log(`🤖 Generating AI call summary for contact ${contactId}...`);
-  
-  try {
-    const summaryResponse = await fetch(`${SUPABASE_URL}/functions/v1/generate-call-summary`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        firstName: extractedInfo.firstName,
-        lastName: extractedInfo.lastName,
-        phoneNumber: callerNumber,
-        email: extractedInfo.email,
-        callerType: extractedInfo.callerType,
-        callId: callId,
-        transcript: transcript,
-        notes: extractedInfo.notes || transcript.substring(0, 500),
-        customFields: extractedInfo
-      })
-    });
-
-    if (summaryResponse.ok) {
-      const { summary } = await summaryResponse.json();
-      console.log('✅ AI Summary generated:', summary);
-      
-      // Fetch existing summary to append
-      const { data: contact } = await supabase
-        .from('contacts')
-        .select('call_summary')
-        .eq('id', contactId)
-        .single();
-      
-      // Format new summary with timestamp
-      const timestamp = new Date().toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      });
-      
-      const formattedNewSummary = `**[${timestamp}]**\n${summary}`;
-      
-      // Append to existing or create new
-      const updatedSummary = contact?.call_summary
-        ? `${contact.call_summary}\n\n---\n\n${formattedNewSummary}`
-        : formattedNewSummary;
-      
-      // Update contact with appended summary
-      await supabase
-        .from('contacts')
-        .update({ call_summary: updatedSummary })
-        .eq('id', contactId);
-      
-      console.log('✅ Contact updated with AI summary');
-    } else {
-      console.error('❌ Failed to generate summary:', await summaryResponse.text());
-    }
-  } catch (error) {
-    console.error('❌ Error generating AI summary:', error);
   }
 }
 
@@ -500,7 +417,7 @@ async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metad
           : metadata.firstName || metadata.name || null,
         email: metadata.email || null,
         notes: metadata.notes || null,
-        tags: metadata.callerType ? [metadata.callerType] : (metadata.tags || (metadata.firstName === 'Unknown' ? ['anonymous-caller'] : ['voice-call'])),
+        tags: metadata.callerType ? [metadata.callerType] : (metadata.tags || ['voice-call']),
         custom_fields: {
           ...(metadata.customFields || {}),
           caller_type: metadata.callerType || 'unknown',
@@ -1186,7 +1103,6 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
       }
     }
     console.log(`DEBUG: Incoming call - calledNumber=${calledNumber}, callerNumber=${callerNumber}, agentId=${agentId}, userId=${userId}`);
-    console.log(`DEBUG: Phone lookup successful: ${userId ? 'YES' : 'NO - WILL USE FALLBACK CONTACT SEARCH'}`);
     const config = getUserAgent(userId, agentId);
     console.log('=== INCOMING CALL WEBHOOK ===');
     console.log('Called Number:', calledNumber);
@@ -1306,7 +1222,15 @@ fastify.register(async (fastify) => {
 
     try {
       conversationWs = initializeConversationWs();
+      transcriptionWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
+        headers: {
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          "OpenAI-Beta": "realtime=v1"
+        },
+        timeout: 30000
+      });
       connectionData.conversationWs = conversationWs;
+      connectionData.transcriptionWs = transcriptionWs;
       activeConnections.add(connectionData);
     } catch (error) {
       console.error('Failed to create OpenAI WebSockets:', error);
@@ -1316,8 +1240,15 @@ fastify.register(async (fastify) => {
 
     // Add connection health monitoring with active pings
     const keepAliveInterval = setInterval(() => {
+      if (conversationWs?.readyState === WebSocket.OPEN) {
+        try {
+          conversationWs.send(JSON.stringify({ type: 'session.ping' }));
+        } catch (e) {
+          console.error('Keepalive failed:', e);
+        }
+      }
       if (Date.now() - lastActivity > 45000) {
-        console.warn('⚠️ No activity for 45s - connection may be stale');
+        console.warn('No activity for 45s - connection may be dead');
       }
     }, 15000);
 
@@ -1339,9 +1270,9 @@ fastify.register(async (fastify) => {
               format: { type: 'audio/pcmu' },
               turn_detection: {
                 type: "server_vad",
-                threshold: 0.68,
-                prefix_padding_ms: 450,
-                silence_duration_ms: 900
+                threshold: 0.55,
+                prefix_padding_ms: 400,
+                silence_duration_ms: 700
               }
             },
             output: {
@@ -1350,9 +1281,6 @@ fastify.register(async (fastify) => {
             },
           },
           instructions: agentConfig.systemMessage,
-          input_audio_transcription: {
-            model: 'whisper-1'
-          },
           tools: [
             {
               type: "function",
@@ -1389,6 +1317,22 @@ fastify.register(async (fastify) => {
       };
       if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
         conversationWs.send(JSON.stringify(sessionUpdate));
+      }
+    };
+
+    const initializeTranscriptionSession = () => {
+      console.log('=== INITIALIZING TRANSCRIPTION SESSION ===');
+      const transcriptionSessionUpdate = {
+        type: 'session.update',
+        session: {
+          input_audio_transcription: {
+            enabled: true,
+            model: 'whisper-1'
+          }
+        }
+      };
+      if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
+        transcriptionWs.send(JSON.stringify(transcriptionSessionUpdate));
       }
     };
 
@@ -1527,42 +1471,12 @@ fastify.register(async (fastify) => {
 
                   // Check if contact already exists
                   console.log('🔍 Checking for existing contact:', { userId, phoneNumber });
-
-                  let existingContact = null;
-                  let selectError = null;
-
-                  // First try: Search with userId if available
-                  if (userId) {
-                    const result = await supabase
-                      .from('contacts')
-                      .select('*')
-                      .eq('user_id', userId)
-                      .eq('phone_number', phoneNumber)
-                      .maybeSingle();
-                    
-                    existingContact = result.data;
-                    selectError = result.error;
-                  }
-
-                  // Second try: If userId is null or no contact found, search by phone alone
-                  // This handles the case where userId lookup failed but contact exists
-                  if (!existingContact && !selectError) {
-                    console.log('🔍 Fallback: Searching for contact by phone number alone');
-                    const result = await supabase
-                      .from('contacts')
-                      .select('*')
-                      .eq('phone_number', phoneNumber)
-                      .maybeSingle();
-                    
-                    existingContact = result.data;
-                    selectError = result.error;
-                    
-                    // If we found a contact this way, use its user_id for the update
-                    if (existingContact) {
-                      console.log(`✅ Found existing contact via phone lookup: ${existingContact.id} (user: ${existingContact.user_id})`);
-                      userId = existingContact.user_id; // Use the contact's user_id for consistency
-                    }
-                  }
+                  const { data: existingContact, error: selectError } = await supabase
+                    .from('contacts')
+                    .select('*')
+                    .eq('user_id', userId)
+                    .eq('phone_number', phoneNumber)
+                    .maybeSingle();
 
                   if (selectError) {
                     console.error('❌ Error checking for existing contact:', selectError);
@@ -1637,7 +1551,6 @@ fastify.register(async (fastify) => {
                           email: args.email,
                           callerType: args.callerType,
                           callId: callId,
-                          transcript: TRANSCRIPT_STORAGE[callId] ? TRANSCRIPT_STORAGE[callId].map(entry => `${entry.role}: ${entry.text}`).join('\n') : '',
                           notes: args.notes,
                           customFields: args
                         })
@@ -1729,7 +1642,6 @@ fastify.register(async (fastify) => {
                           email: args.email,
                           callerType: args.callerType,
                           callId: callId,
-                          transcript: TRANSCRIPT_STORAGE[callId] ? TRANSCRIPT_STORAGE[callId].map(entry => `${entry.role}: ${entry.text}`).join('\n') : '',
                           notes: args.notes,
                           customFields: args
                         })
@@ -1815,26 +1727,6 @@ fastify.register(async (fastify) => {
         if (response.type === 'input_audio_buffer.speech_started') {
           handleSpeechStartedEvent();
         }
-
-        // Capture user speech transcriptions
-        if (response.type === 'conversation.item.input_audio_transcription.completed') {
-          console.log('📝 User transcription:', response.transcript);
-          saveTranscriptEntry(callId, {
-            role: 'user',
-            text: response.transcript,
-            timestamp: new Date().toISOString()
-          });
-        }
-
-        // Capture AI response transcriptions
-        if (response.type === 'response.audio_transcript.done') {
-          console.log('🤖 Assistant transcription:', response.transcript);
-          saveTranscriptEntry(callId, {
-            role: 'assistant',
-            text: response.transcript,
-            timestamp: new Date().toISOString()
-          });
-        }
       } catch (error) {
         console.error('Error processing conversation message:', error);
       }
@@ -1861,6 +1753,37 @@ fastify.register(async (fastify) => {
       console.error('Error in Conversation WebSocket:', error);
     });
 
+    transcriptionWs.on('open', () => {
+      console.log('Connected to OpenAI Transcription API');
+      setTimeout(initializeTranscriptionSession, 200);
+    });
+
+    transcriptionWs.on('message', (data) => {
+      try {
+        lastActivity = Date.now();
+        const response = JSON.parse(data);
+        console.log(`📝 Transcription event: ${response.type}`);
+        if (response.type === 'conversation.item.input_audio_transcription.completed') {
+          const transcriptEntry = {
+            id: response.item_id,
+            timestamp: new Date().toISOString(),
+            speaker: 'caller',
+            text: response.transcript,
+            confidence: calculateConfidence(response.logprobs)
+          };
+          console.log(`📝 Transcript completed: ${response.transcript}`);
+          if (callId) {
+            saveTranscriptEntry(callId, transcriptEntry);
+          }
+        }
+        if (response.type === 'conversation.item.input_audio_transcription.delta') {
+          console.log(`📝 Transcript delta: ${response.delta}`);
+        }
+      } catch (error) {
+        console.error('Error processing transcription message:', error);
+      }
+    });
+
     connection.on('message', (message) => {
       try {
         lastActivity = Date.now();
@@ -1874,6 +1797,13 @@ fastify.register(async (fastify) => {
                 audio: data.media.payload
               };
               conversationWs.send(JSON.stringify(audioAppend));
+            }
+            if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
+              const audioAppend = {
+                type: 'input_audio_buffer.append',
+                audio: data.media.payload
+              };
+              transcriptionWs.send(JSON.stringify(audioAppend));
             }
             break;
           case 'start':
@@ -1941,10 +1871,21 @@ fastify.register(async (fastify) => {
       if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
         conversationWs.close();
       }
+      if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
+        transcriptionWs.close();
+      }
     });
 
     connection.on('error', (error) => {
       console.error('WebSocket connection error:', error);
+    });
+
+    transcriptionWs.on('close', (code, reason) => {
+      console.log(`Disconnected from OpenAI Transcription API. Code: ${code}, Reason: ${reason}`);
+    });
+
+    transcriptionWs.on('error', (error) => {
+      console.error('Error in Transcription WebSocket:', error);
     });
   });
 });
