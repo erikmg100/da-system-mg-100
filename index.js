@@ -1402,7 +1402,6 @@ fastify.register(async (fastify) => {
         type: 'session.update',
         session: {
           input_audio_transcription: {
-            enabled: true,
             model: 'whisper-1'
           }
         }
