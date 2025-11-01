@@ -1323,15 +1323,8 @@ fastify.register(async (fastify) => {
 
     // Add connection health monitoring with active pings
     const keepAliveInterval = setInterval(() => {
-      if (conversationWs?.readyState === WebSocket.OPEN) {
-        try {
-          conversationWs.send(JSON.stringify({ type: 'session.ping' }));
-        } catch (e) {
-          console.error('Keepalive failed:', e);
-        }
-      }
       if (Date.now() - lastActivity > 45000) {
-        console.warn('No activity for 45s - connection may be dead');
+        console.warn('⚠️ No activity for 45s - connection may be stale');
       }
     }, 15000);
 
@@ -1364,6 +1357,9 @@ fastify.register(async (fastify) => {
             },
           },
           instructions: agentConfig.systemMessage,
+          input_audio_transcription: {
+            model: "whisper-1"
+          },
           tools: [
             {
               type: "function",
@@ -1839,6 +1835,26 @@ fastify.register(async (fastify) => {
         }
         if (response.type === 'input_audio_buffer.speech_started') {
           handleSpeechStartedEvent();
+        }
+
+        // Capture user speech transcriptions
+        if (response.type === 'conversation.item.input_audio_transcription.completed') {
+          console.log('📝 User transcription:', response.transcript);
+          saveTranscriptEntry(callId, {
+            role: 'user',
+            text: response.transcript,
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        // Capture AI response transcriptions
+        if (response.type === 'response.audio_transcript.done') {
+          console.log('🤖 Assistant transcription:', response.transcript);
+          saveTranscriptEntry(callId, {
+            role: 'assistant',
+            text: response.transcript,
+            timestamp: new Date().toISOString()
+          });
         }
       } catch (error) {
         console.error('Error processing conversation message:', error);
