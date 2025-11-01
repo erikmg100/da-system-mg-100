@@ -315,7 +315,7 @@ function calculateConfidence(logprobs) {
   return Math.exp(avgLogprob);
 }
 
-// 🆕 UNIVERSAL AUTOMATIC CONTACT EXTRACTION
+// 🆕 UNIVERSAL AUTOMATIC CONTACT EXTRACTION - ALWAYS CREATES CONTACT WITH AI SUMMARY
 async function extractContactFromTranscript(callId, userId, callerNumber) {
   console.log(`🔍 [extractContactFromTranscript] Starting for call ${callId}`);
   
@@ -361,24 +361,106 @@ async function extractContactFromTranscript(callId, userId, callerNumber) {
     
     console.log('✅ Extracted contact info:', extractedInfo);
 
-    // Only save if we at least got a name
-    if (extractedInfo.firstName) {
-      await createOrUpdateContact(
-        userId,
-        callerNumber,
-        callId,
-        null, // agentId not needed for transcript extraction
-        extractedInfo
-      );
-      console.log('✅ Contact automatically saved from transcript');
-      return extractedInfo;
-    } else {
-      console.log('⚠️ No contact name found in transcript - skipping save');
-      return null;
+    // ALWAYS save contact, even if no name found - use "Unknown Caller"
+    if (!extractedInfo.firstName) {
+      extractedInfo.firstName = 'Unknown';
+      extractedInfo.lastName = 'Caller';
+      extractedInfo.notes = extractedInfo.notes || 'Caller did not provide name';
+      console.log('⚠️ No contact name found - using "Unknown Caller" placeholder');
     }
+
+    // Save or update contact
+    const contact = await createOrUpdateContact(
+      userId,
+      callerNumber,
+      callId,
+      null, // agentId not needed for transcript extraction
+      extractedInfo
+    );
+
+    // ALWAYS generate AI summary for the contact
+    if (contact) {
+      console.log('🤖 Generating AI call summary for contact...');
+      await generateCallSummaryForContact(
+        contact.id,
+        fullTranscript,
+        extractedInfo,
+        callerNumber,
+        callId
+      );
+      console.log('✅ Contact saved and AI summary generated');
+    }
+
+    return extractedInfo;
   } catch (error) {
     console.error('❌ Error extracting contact from transcript:', error);
     return null;
+  }
+}
+
+// 🆕 Generate AI call summary and append to contact's call_summary field
+async function generateCallSummaryForContact(contactId, transcript, extractedInfo, callerNumber, callId) {
+  console.log(`🤖 Generating AI call summary for contact ${contactId}...`);
+  
+  try {
+    const summaryResponse = await fetch(`${SUPABASE_URL}/functions/v1/generate-call-summary`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        firstName: extractedInfo.firstName,
+        lastName: extractedInfo.lastName,
+        phoneNumber: callerNumber,
+        email: extractedInfo.email,
+        callerType: extractedInfo.callerType,
+        callId: callId,
+        notes: extractedInfo.notes || transcript.substring(0, 500), // Use transcript excerpt if no notes
+        customFields: extractedInfo
+      })
+    });
+
+    if (summaryResponse.ok) {
+      const { summary } = await summaryResponse.json();
+      console.log('✅ AI Summary generated:', summary);
+      
+      // Fetch existing summary to append
+      const { data: contact } = await supabase
+        .from('contacts')
+        .select('call_summary')
+        .eq('id', contactId)
+        .single();
+      
+      // Format new summary with timestamp
+      const timestamp = new Date().toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+      
+      const formattedNewSummary = `**[${timestamp}]**\n${summary}`;
+      
+      // Append to existing or create new
+      const updatedSummary = contact?.call_summary
+        ? `${contact.call_summary}\n\n---\n\n${formattedNewSummary}`
+        : formattedNewSummary;
+      
+      // Update contact with appended summary
+      await supabase
+        .from('contacts')
+        .update({ call_summary: updatedSummary })
+        .eq('id', contactId);
+      
+      console.log('✅ Contact updated with AI summary');
+    } else {
+      console.error('❌ Failed to generate summary:', await summaryResponse.text());
+    }
+  } catch (error) {
+    console.error('❌ Error generating AI summary:', error);
   }
 }
 
@@ -417,7 +499,7 @@ async function createOrUpdateContact(userId, phoneNumber, callId, agentId, metad
           : metadata.firstName || metadata.name || null,
         email: metadata.email || null,
         notes: metadata.notes || null,
-        tags: metadata.callerType ? [metadata.callerType] : (metadata.tags || ['voice-call']),
+        tags: metadata.callerType ? [metadata.callerType] : (metadata.tags || (metadata.firstName === 'Unknown' ? ['anonymous-caller'] : ['voice-call'])),
         custom_fields: {
           ...(metadata.customFields || {}),
           caller_type: metadata.callerType || 'unknown',
@@ -1271,9 +1353,9 @@ fastify.register(async (fastify) => {
               format: { type: 'audio/pcmu' },
               turn_detection: {
                 type: "server_vad",
-                threshold: 0.55,
-                prefix_padding_ms: 400,
-                silence_duration_ms: 700
+                threshold: 0.68,
+                prefix_padding_ms: 450,
+                silence_duration_ms: 900
               }
             },
             output: {
