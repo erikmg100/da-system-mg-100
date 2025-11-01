@@ -171,9 +171,7 @@ const LOG_EVENT_TYPES = [
   'input_audio_buffer.speech_started',
   'session.created',
   'session.updated',
-  'response.function_call_arguments.done',
-  'conversation.item.input_audio_transcription.completed',
-  'response.audio_transcript.done'
+  'response.function_call_arguments.done'
 ];
 
 const SHOW_TIMING_MATH = process.env.SHOW_TIMING_MATH === 'true';
@@ -400,7 +398,7 @@ async function extractContactFromTranscript(callId, userId, callerNumber) {
   }
 }
 
-// 🤖 Generate AI call summary and append to contact's call_summary field
+// 🆕 Generate AI call summary and append to contact's call_summary field
 async function generateCallSummaryForContact(contactId, transcript, extractedInfo, callerNumber, callId) {
   console.log(`🤖 Generating AI call summary for contact ${contactId}...`);
   
@@ -418,13 +416,8 @@ async function generateCallSummaryForContact(contactId, transcript, extractedInf
         email: extractedInfo.email,
         callerType: extractedInfo.callerType,
         callId: callId,
-        notes: extractedInfo.notes || transcript, // Pass FULL transcript for detailed AI summary
-        transcript: transcript, // Add explicit transcript field with full conversation
-        customFields: {
-          ...extractedInfo,
-          hasTranscript: true,
-          transcriptLength: transcript.length
-        }
+        notes: extractedInfo.notes || transcript.substring(0, 500), // Use transcript excerpt if no notes
+        customFields: extractedInfo
       })
     });
 
@@ -1245,8 +1238,9 @@ fastify.register(async (fastify) => {
     let markQueue = [];
     let responseStartTimestampTwilio = null;
     let conversationWs = null;
+    let transcriptionWs = null;
     let lastActivity = Date.now();
-    const connectionData = { connection, conversationWs: null, agentId };
+    const connectionData = { connection, conversationWs: null, transcriptionWs: null, agentId };
     
     // Function to initialize or reinitialize conversation WebSocket
     const initializeConversationWs = () => {
@@ -1311,7 +1305,15 @@ fastify.register(async (fastify) => {
 
     try {
       conversationWs = initializeConversationWs();
+      transcriptionWs = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
+        headers: {
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          "OpenAI-Beta": "realtime=v1"
+        },
+        timeout: 30000
+      });
       connectionData.conversationWs = conversationWs;
+      connectionData.transcriptionWs = transcriptionWs;
       activeConnections.add(connectionData);
     } catch (error) {
       console.error('Failed to create OpenAI WebSockets:', error);
@@ -1319,8 +1321,15 @@ fastify.register(async (fastify) => {
       return;
     }
 
-    // Add connection health monitoring (removed session.ping as it's no longer supported)
+    // Add connection health monitoring with active pings
     const keepAliveInterval = setInterval(() => {
+      if (conversationWs?.readyState === WebSocket.OPEN) {
+        try {
+          conversationWs.send(JSON.stringify({ type: 'session.ping' }));
+        } catch (e) {
+          console.error('Keepalive failed:', e);
+        }
+      }
       if (Date.now() - lastActivity > 45000) {
         console.warn('No activity for 45s - connection may be dead');
       }
@@ -1339,9 +1348,6 @@ fastify.register(async (fastify) => {
           type: 'realtime',
           model: "gpt-realtime",
           output_modalities: ["audio"],
-          input_audio_transcription: {
-            model: "whisper-1"
-          },
           audio: {
             input: {
               format: { type: 'audio/pcmu' },
@@ -1394,6 +1400,22 @@ fastify.register(async (fastify) => {
       };
       if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
         conversationWs.send(JSON.stringify(sessionUpdate));
+      }
+    };
+
+    const initializeTranscriptionSession = () => {
+      console.log('=== INITIALIZING TRANSCRIPTION SESSION ===');
+      const transcriptionSessionUpdate = {
+        type: 'session.update',
+        session: {
+          input_audio_transcription: {
+            enabled: true,
+            model: 'whisper-1'
+          }
+        }
+      };
+      if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
+        transcriptionWs.send(JSON.stringify(transcriptionSessionUpdate));
       }
     };
 
@@ -1818,25 +1840,6 @@ fastify.register(async (fastify) => {
         if (response.type === 'input_audio_buffer.speech_started') {
           handleSpeechStartedEvent();
         }
-
-        // Handle transcription events from OpenAI
-        if (response.type === 'conversation.item.input_audio_transcription.completed') {
-          console.log('📝 User transcription received:', response.transcript);
-          saveTranscriptEntry(callId, {
-            role: 'user',
-            text: response.transcript,
-            timestamp: new Date().toISOString()
-          });
-        }
-
-        if (response.type === 'response.audio_transcript.done') {
-          console.log('🤖 Assistant transcription received:', response.transcript);
-          saveTranscriptEntry(callId, {
-            role: 'assistant',
-            text: response.transcript,
-            timestamp: new Date().toISOString()
-          });
-        }
       } catch (error) {
         console.error('Error processing conversation message:', error);
       }
@@ -1863,6 +1866,37 @@ fastify.register(async (fastify) => {
       console.error('Error in Conversation WebSocket:', error);
     });
 
+    transcriptionWs.on('open', () => {
+      console.log('Connected to OpenAI Transcription API');
+      setTimeout(initializeTranscriptionSession, 200);
+    });
+
+    transcriptionWs.on('message', (data) => {
+      try {
+        lastActivity = Date.now();
+        const response = JSON.parse(data);
+        console.log(`📝 Transcription event: ${response.type}`);
+        if (response.type === 'conversation.item.input_audio_transcription.completed') {
+          const transcriptEntry = {
+            id: response.item_id,
+            timestamp: new Date().toISOString(),
+            speaker: 'caller',
+            text: response.transcript,
+            confidence: calculateConfidence(response.logprobs)
+          };
+          console.log(`📝 Transcript completed: ${response.transcript}`);
+          if (callId) {
+            saveTranscriptEntry(callId, transcriptEntry);
+          }
+        }
+        if (response.type === 'conversation.item.input_audio_transcription.delta') {
+          console.log(`📝 Transcript delta: ${response.delta}`);
+        }
+      } catch (error) {
+        console.error('Error processing transcription message:', error);
+      }
+    });
+
     connection.on('message', (message) => {
       try {
         lastActivity = Date.now();
@@ -1876,6 +1910,13 @@ fastify.register(async (fastify) => {
                 audio: data.media.payload
               };
               conversationWs.send(JSON.stringify(audioAppend));
+            }
+            if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
+              const audioAppend = {
+                type: 'input_audio_buffer.append',
+                audio: data.media.payload
+              };
+              transcriptionWs.send(JSON.stringify(audioAppend));
             }
             break;
           case 'start':
@@ -1943,10 +1984,21 @@ fastify.register(async (fastify) => {
       if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
         conversationWs.close();
       }
+      if (transcriptionWs && transcriptionWs.readyState === WebSocket.OPEN) {
+        transcriptionWs.close();
+      }
     });
 
     connection.on('error', (error) => {
       console.error('WebSocket connection error:', error);
+    });
+
+    transcriptionWs.on('close', (code, reason) => {
+      console.log(`Disconnected from OpenAI Transcription API. Code: ${code}, Reason: ${reason}`);
+    });
+
+    transcriptionWs.on('error', (error) => {
+      console.error('Error in Transcription WebSocket:', error);
     });
   });
 });
