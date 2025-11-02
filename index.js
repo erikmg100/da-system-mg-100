@@ -1333,11 +1333,17 @@ fastify.register(async (fastify) => {
           type: 'realtime',
           model: "gpt-realtime",
           instructions: agentConfig.systemMessage,
-          voice: agentConfig.voice || 'marin',
-          input_audio_format: 'pcmu',
-          output_audio_format: 'pcmu',
-          input_audio_transcription: {
-            model: 'whisper-1'
+          audio: {
+            input: {
+              format: 'pcmu',
+              transcription: {
+                model: 'whisper-1'
+              }
+            },
+            output: {
+              format: 'pcmu',
+              voice: agentConfig.voice || 'marin'
+            }
           },
           turn_detection: {
             type: "server_vad",
@@ -1447,6 +1453,22 @@ fastify.register(async (fastify) => {
         if (LOG_EVENT_TYPES.includes(response.type)) {
           console.log(`Conversation event: ${response.type}`, response);
         }
+        
+        // CRITICAL: Handle audio streaming from OpenAI to Twilio
+        if (response.type === 'response.audio.delta' && response.delta) {
+          // Stream audio back to Twilio
+          const audioDelta = {
+            event: 'media',
+            streamSid: streamSid,
+            media: { 
+              payload: response.delta  // Base64 PCMU audio
+            }
+          };
+          if (connection.readyState === WebSocket.OPEN) {
+            connection.send(JSON.stringify(audioDelta));
+          }
+        }
+        
         if (response.type === 'response.done' && response.response.status === 'failed') {
           console.log('=== CONVERSATION RESPONSE FAILURE ===');
           console.log('Full response object:', JSON.stringify(response.response, null, 2));
