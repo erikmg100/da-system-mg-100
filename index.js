@@ -1327,22 +1327,25 @@ fastify.register(async (fastify) => {
       console.log('Using SYSTEM_MESSAGE for USER:', userId || 'global');
       console.log('System Message Preview:', agentConfig.systemMessage.substring(0, 150) + '...');
       console.log('==========================================');
+      
+      // CRITICAL: Use the CORRECT session structure for gpt-realtime
       const sessionUpdate = {
         type: 'session.update',
         session: {
           type: 'realtime',
           model: "gpt-realtime",
           instructions: agentConfig.systemMessage,
+          // NO voice parameter here - it must be in audio.output
           audio: {
             input: {
-              format: 'pcmu',
+              format: 'g711_ulaw',  // Explicit μ-law format for Twilio
               transcription: {
                 model: 'whisper-1'
               }
             },
             output: {
-              format: 'pcmu',
-              voice: agentConfig.voice || 'marin'
+              format: 'g711_ulaw',  // Explicit μ-law format for Twilio
+              voice: agentConfig.voice || 'marin'  // Voice goes HERE only
             }
           },
           turn_detection: {
@@ -1385,8 +1388,12 @@ fastify.register(async (fastify) => {
           tool_choice: "auto"
         },
       };
+      
       if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
         conversationWs.send(JSON.stringify(sessionUpdate));
+        console.log('✅ Session update sent successfully');
+      } else {
+        console.error('❌ WebSocket not ready - session update failed');
       }
     };
 
@@ -1894,17 +1901,29 @@ fastify.register(async (fastify) => {
       try {
         lastActivity = Date.now();
         const data = JSON.parse(message);
+        
+        // Log all events for debugging
+        if (data.event !== 'media') {
+          console.log(`Received non-media event: ${data.event}`);
+        }
+        
         switch (data.event) {
           case 'media':
+            // Track that we're receiving audio from Twilio
+            if (!latestMediaTimestamp) {
+              console.log('✅ First media packet received from Twilio');
+            }
             latestMediaTimestamp = data.media.timestamp;
+            
             if (conversationWs && conversationWs.readyState === WebSocket.OPEN) {
               const audioAppend = {
                 type: 'input_audio_buffer.append',
                 audio: data.media.payload
               };
               conversationWs.send(JSON.stringify(audioAppend));
+            } else {
+              console.error('❌ Cannot send audio to OpenAI - WebSocket not ready');
             }
-            // Audio transcription now handled by conversationWs
             break;
           case 'start':
             streamSid = data.start.streamSid;
