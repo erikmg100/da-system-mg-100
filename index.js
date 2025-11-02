@@ -1334,8 +1334,8 @@ fastify.register(async (fastify) => {
           model: "gpt-realtime",
           instructions: agentConfig.systemMessage,
           voice: agentConfig.voice || 'marin',
-          input_audio_format: 'pcm16',
-          output_audio_format: 'pcm16',
+          input_audio_format: 'pcmu',
+          output_audio_format: 'pcmu',
           input_audio_transcription: {
             model: 'whisper-1'
           },
