@@ -769,7 +769,7 @@ fastify.get('/media-stream', { websocket: true }, async (connection, request) =>
     }
   }, 5000);
   
-  const conversationWs = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01', {
+  const conversationWs = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-realtime', {
     headers: {
       Authorization: `Bearer ${OPENAI_API_KEY}`,
       "OpenAI-Beta": "realtime=v1"
@@ -1035,7 +1035,7 @@ fastify.get('/media-stream', { websocket: true }, async (connection, request) =>
         if (response.error.code === 'invalid_api_key') {
           console.error('API Key is invalid!');
         } else if (response.error.code === 'model_not_found') {
-          console.error('Model not found - check if you have access to gpt-4o-realtime-preview');
+          console.error('Model not found - check if you have access to gpt-realtime');
         } else if (response.error.type === 'invalid_request_error') {
           console.log('Attempting to recover from session error...');
           // Re-initialize session with simpler configuration
@@ -1246,15 +1246,6 @@ fastify.get('/media-stream', { websocket: true }, async (connection, request) =>
               audio: data.media.payload  // Base64 G.711 μ-law audio from Twilio
             };
             conversationWs.send(JSON.stringify(audioAppend));
-            
-            // IMPORTANT: Commit the buffer periodically
-            // This triggers VAD processing
-            if (latestMediaTimestamp % 250 === 0) {  // Every 250ms
-              const commitMessage = {
-                type: 'input_audio_buffer.commit'
-              };
-              conversationWs.send(JSON.stringify(commitMessage));
-            }
           } else {
             console.error('❌ Cannot forward audio - OpenAI WebSocket not ready');
           }
@@ -1373,6 +1364,7 @@ const start = async () => {
   try {
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`🚀 Server is listening on port ${PORT}`);
+    console.log('✅ OpenAI Model: gpt-realtime (NEW Realtime API)');
     console.log('✅ Voice conversation system: ACTIVE');
     console.log('✅ Real-time transcription: ACTIVE');
     console.log('✅ Dashboard APIs: ACTIVE');
@@ -1380,6 +1372,7 @@ const start = async () => {
     console.log('✅ User data isolation: ACTIVE');
     console.log('✅ Lovable sync endpoint: ACTIVE');
     console.log('✅ Audio streaming (G.711 μ-law): FIXED');
+    console.log('✅ Server VAD: Enabled (no manual commits)');
     console.log('✅ Contact management: ACTIVE');
     console.log('✅ End call function: ACTIVE');
     console.log('✅ Save contact function: ACTIVE (Direct Supabase)');
