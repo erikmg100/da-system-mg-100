@@ -724,6 +724,117 @@ fastify.get('/api/agents', async (request, reply) => {
   }
 });
 
+// Get current prompt for an agent
+fastify.get('/api/current-prompt', async (request, reply) => {
+  const userId = request.headers['x-user-id'];
+  const agentId = request.query.agentId;
+  
+  console.log(`📥 Get current prompt: userId=${userId}, agentId=${agentId}`);
+  
+  if (!agentId) {
+    return reply.status(400).send({ error: 'Agent ID is required' });
+  }
+  
+  try {
+    const agentConfig = await fetchAgentConfig(agentId, userId);
+    
+    return reply.send({
+      prompt: agentConfig.systemMessage || '',
+      speaksFirst: agentConfig.speaksFirst || 'caller',
+      isManualEdit: false,
+      agentName: agentConfig.name || '',
+      voice: agentConfig.voice || 'marin',
+      greetingMessage: agentConfig.greetingMessage || ''
+    });
+  } catch (error) {
+    console.error('❌ Error fetching prompt:', error);
+    return reply.status(500).send({ error: 'Failed to fetch agent prompt', details: error.message });
+  }
+});
+
+// Update prompt for an agent
+fastify.put('/api/update-prompt', async (request, reply) => {
+  const userId = request.headers['x-user-id'];
+  const { agentId, prompt, speaksFirst, agentName, voice, greetingMessage } = request.body;
+  
+  console.log(`📥 Update prompt: userId=${userId}, agentId=${agentId}`);
+  console.log(`   - Prompt length: ${prompt?.length || 0} chars`);
+  console.log(`   - Speaks first: ${speaksFirst}`);
+  console.log(`   - Agent name: ${agentName}`);
+  console.log(`   - Voice: ${voice}`);
+  
+  if (!agentId) {
+    return reply.status(400).send({ error: 'Agent ID is required' });
+  }
+  
+  if (!supabase) {
+    return reply.status(503).send({ error: 'Supabase not initialized' });
+  }
+  
+  try {
+    // Update the agent in Supabase
+    const { data, error } = await supabase
+      .from('agents')
+      .update({
+        system_message: prompt,
+        speaks_first: speaksFirst || 'caller',
+        name: agentName,
+        voice: voice || 'marin',
+        greeting_message: greetingMessage,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', agentId)
+      .eq('user_id', userId)
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('❌ Database update error:', error);
+      return reply.status(500).send({ error: 'Failed to update agent', details: error.message });
+    }
+    
+    // Update the in-memory caches
+    const updatedConfig = {
+      id: data.id,
+      name: data.name,
+      systemMessage: data.system_message,
+      speaksFirst: data.speaks_first,
+      voice: data.voice,
+      greetingMessage: data.greeting_message,
+      phone: data.phone,
+      personality: data.personality,
+      language: data.language,
+      status: data.status,
+      totalCalls: data.total_calls || 0,
+      todayCalls: data.today_calls || 0,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at
+    };
+    
+    // Update both caches
+    if (userId && USER_DATABASE[userId]?.agents) {
+      USER_DATABASE[userId].agents[agentId] = updatedConfig;
+      console.log('✅ Updated user cache');
+    }
+    if (GLOBAL_AGENT_CONFIGS[agentId]) {
+      GLOBAL_AGENT_CONFIGS[agentId] = updatedConfig;
+      console.log('✅ Updated global cache');
+    }
+    
+    console.log('✅ Agent updated successfully:', agentId);
+    
+    return reply.send({
+      success: true,
+      message: 'Agent updated successfully',
+      agent: updatedConfig
+    });
+    
+  } catch (error) {
+    console.error('❌ Update prompt error:', error);
+    return reply.status(500).send({ error: 'Failed to update agent', details: error.message });
+  }
+});
+
 // WebSocket route for media streaming
 fastify.get('/media-stream', { websocket: true }, async (connection, request) => {
   console.log('=== NEW WEBSOCKET CONNECTION ESTABLISHED ===');
@@ -1371,6 +1482,7 @@ const start = async () => {
     console.log('✅ Multi-user support: ACTIVE');
     console.log('✅ User data isolation: ACTIVE');
     console.log('✅ Lovable sync endpoint: ACTIVE');
+    console.log('✅ Lovable API endpoints: ACTIVE (/api/current-prompt, /api/update-prompt)');
     console.log('✅ Audio streaming (G.711 μ-law): FIXED');
     console.log('✅ Server VAD: Enabled (no manual commits)');
     console.log('✅ Contact management: ACTIVE');
