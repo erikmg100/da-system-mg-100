@@ -1247,6 +1247,7 @@ fastify.register(async (fastify) => {
       const ws = new WebSocket(`wss://api.openai.com/v1/realtime?model=gpt-realtime`, {
         headers: {
           'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          'OpenAI-Beta': 'realtime=v1',
         },
         timeout: 30000
       });
@@ -1330,28 +1331,21 @@ fastify.register(async (fastify) => {
       const sessionUpdate = {
         type: 'session.update',
         session: {
-          type: 'realtime',
-          model: "gpt-realtime",
-          output_modalities: ["audio"],
-          audio: {
-            input: {
-              format: { type: 'audio/pcmu' },
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.68,
-                prefix_padding_ms: 450,
-                silence_duration_ms: 900
-              }
-            },
-            output: {
-              format: { type: 'audio/pcmu' },
-              voice: 'marin'
-            },
-          },
+          modalities: ['audio', 'text'],
           instructions: agentConfig.systemMessage,
+          voice: agentConfig.voice || 'marin',
+          input_audio_format: 'g711_ulaw',
+          output_audio_format: 'g711_ulaw',
+          turn_detection: {
+            type: 'server_vad',
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 800
+          },
           input_audio_transcription: {
             model: 'whisper-1'
           },
+          temperature: 0.8,
           tools: [
             {
               type: "function",
@@ -1789,7 +1783,7 @@ fastify.register(async (fastify) => {
             })();
           }
         }
-        if (response.type === 'response.output_audio.delta' && response.delta) {
+        if (response.type === 'response.audio.delta' && response.delta) {
           try {
             if (connection.readyState === WebSocket.OPEN) {
               const audioDelta = {
