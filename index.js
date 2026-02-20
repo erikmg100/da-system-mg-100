@@ -1214,7 +1214,7 @@ fastify.all('/incoming-call/:agentId?', async (request, reply) => {
 });
 
 fastify.register(async (fastify) => {
-  fastify.get('/media-stream/:agentId/:userId?', { websocket: true }, async (connection, req) => {
+  fastify.get('/media-stream/:agentId/:userId?', { websocket: true }, (connection, req) => {
     const agentId = req.params.agentId || 'default';
     let userId = req.params.userId || null;
     
