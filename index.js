@@ -873,7 +873,7 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
       name: fullConfig?.name || 'Custom Assistant',
       systemMessage: prompt,
       voice: voice || 'marin',
-      speaksFirst: (speaksFirst === 'ai' || speaksFirst === 'agent' || speaksFirst === 'assistant' || speaksFirst === true) ? 'agent' : 'caller',
+      speaksFirst: (speaksFirst === 'ai' || speaksFirst === 'agent' || speaksFirst === 'assistant' || speaksFirst === true) ? 'ai' : 'caller',
       greetingMessage: fullConfig?.greetingMessage || 'Hello there! How can I help you today?',
       id: agentId,
       phone: fullConfig?.phone || '(440) 693-1068',
@@ -1225,41 +1225,44 @@ fastify.register(async (fastify) => {
     console.log(`DEBUG: WebSocket URL: ${req.url}`);
     console.log(`DEBUG: URL params - agentId: ${agentId}, userId: ${userId}, callerNumber: ${callerNumber}`);
     let agentConfig = getUserAgent(userId, agentId);
+
+    // Fetch agent config from Supabase on every call - source of truth
     if (supabase && userId) {
-  try {
-    const { data, error } = await supabase
-      .from('agent_prompts')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('agent_id', agentId)
-      .eq('is_active', true)
-      .maybeSingle();
+      try {
+        const { data, error } = await supabase
+          .from('agent_prompts')
+          .select('*')
+          .eq('user_id', userId)
+          .eq('agent_id', agentId)
+          .eq('is_active', true)
+          .maybeSingle();
 
-    if (!error && data) {
-      const speaksFirstNormalized =
-        (data.speaking_order === 'agent' || data.speaking_order === 'ai')
-          ? 'ai' : 'caller';
+        if (!error && data) {
+          const speaksFirstNormalized =
+            (data.speaking_order === 'agent' || data.speaking_order === 'ai')
+              ? 'ai' : 'caller';
 
-      agentConfig = {
-        ...agentConfig,
-        systemMessage: data.prompt_text || agentConfig.systemMessage,
-        speaksFirst: speaksFirstNormalized,
-        voice: data.configuration?.voice || 'marin',
-        backgroundNoise: data.background_noise || false,
-      };
-      updateUserAgent(userId, agentId, agentConfig);
-      console.log('✅ Fetched agent config from Supabase:', {
-        speaksFirst: agentConfig.speaksFirst,
-        voice: agentConfig.voice,
-        promptLength: agentConfig.systemMessage?.length
-      });
-    } else {
-      console.log('⚠️ No Supabase config found, using in-memory fallback');
+          agentConfig = {
+            ...agentConfig,
+            systemMessage: data.prompt_text || agentConfig.systemMessage,
+            speaksFirst: speaksFirstNormalized,
+            voice: data.configuration?.voice || 'marin',
+            backgroundNoise: data.background_noise || false,
+          };
+          updateUserAgent(userId, agentId, agentConfig);
+          console.log('✅ Fetched agent config from Supabase:', {
+            speaksFirst: agentConfig.speaksFirst,
+            voice: agentConfig.voice,
+            promptLength: agentConfig.systemMessage?.length
+          });
+        } else {
+          console.log('⚠️ No Supabase config found, using in-memory fallback');
+        }
+      } catch (err) {
+        console.error('Supabase fetch failed, using in-memory fallback:', err.message);
+      }
     }
-  } catch (err) {
-    console.error('Supabase fetch failed, using in-memory fallback:', err.message);
-  }
-}
+
     console.log(`=== WEBSOCKET CONNECTION ===`);
     console.log(`Client connected for agent: ${agentId} (user: ${userId || 'global'})`);
     console.log(`Caller Number from URL: ${callerNumber}`);
@@ -1317,16 +1320,12 @@ fastify.register(async (fastify) => {
       lastAssistantItem = savedState.lastAssistantItem;
       responseStartTimestampTwilio = savedState.responseStartTimestampTwilio;
 
-    conversationWs.on('open', () => {
-  console.log('Connected to OpenAI Conversation API');
-  setTimeout(initializeSession, 100);
-});
+      conversationWs.on('open', () => {
+        console.log('Reconnected to OpenAI Conversation API');
+        setTimeout(initializeSession, 100);
+      });
 
       conversationWs.on('message', handleConversationMessage);
-
-      if (response.type === 'session.updated' && agentConfig.speaksFirst === 'ai') {
-  sendInitialConversationItem();
-}
 
       conversationWs.on('close', (code, reason) => {
         console.log(`Disconnected from OpenAI Conversation API. Code: ${code}, Reason: ${reason}`);
@@ -1488,6 +1487,10 @@ fastify.register(async (fastify) => {
           console.log('=== CONVERSATION RESPONSE FAILURE ===');
           console.log('Full response object:', JSON.stringify(response.response, null, 2));
           console.log('====================================');
+        }
+        if (response.type === 'session.updated' && agentConfig.speaksFirst === 'ai') {
+          console.log('✅ session.updated received - triggering initial greeting');
+          sendInitialConversationItem();
         }
         if (response.type === 'response.function_call_arguments.done') {
           console.log('🔔 Function call detected:', response);
@@ -1872,9 +1875,6 @@ fastify.register(async (fastify) => {
     conversationWs.on('open', () => {
       console.log('Connected to OpenAI Conversation API');
       setTimeout(initializeSession, 100);
-      if (agentConfig.speaksFirst === 'ai') {
-        setTimeout(sendInitialConversationItem, 200);
-      }
     });
 
     conversationWs.on('message', handleConversationMessage);
