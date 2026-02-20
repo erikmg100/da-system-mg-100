@@ -873,7 +873,7 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
       name: fullConfig?.name || 'Custom Assistant',
       systemMessage: prompt,
       voice: voice || 'marin',
-      speaksFirst: (speaksFirst === 'ai' || speaksFirst === 'agent' || speaksFirst === 'assistant' || speaksFirst === true) ? 'ai' : 'caller',
+      speaksFirst: (speaksFirst === 'ai' || speaksFirst === 'agent' || speaksFirst === 'assistant' || speaksFirst === true) ? 'agent' : 'caller',
       greetingMessage: fullConfig?.greetingMessage || 'Hello there! How can I help you today?',
       id: agentId,
       phone: fullConfig?.phone || '(440) 693-1068',
