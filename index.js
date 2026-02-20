@@ -1285,7 +1285,7 @@ fastify.register(async (fastify) => {
       conversationWs.on('open', () => {
         console.log('Reconnected to OpenAI Conversation API');
         setTimeout(initializeSession, 100);
-        if (agentConfig.speaksFirst === 'ai') {
+        if (agentConfig.speaksFirst === 'agent') {
           setTimeout(sendInitialConversationItem, 200);
         }
       });
