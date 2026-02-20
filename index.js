@@ -873,7 +873,7 @@ fastify.post('/api/sync-prompt', async (request, reply) => {
       name: fullConfig?.name || 'Custom Assistant',
       systemMessage: prompt,
       voice: voice || 'marin',
-      speaksFirst: (speaksFirst === 'ai' || speaksFirst === 'agent' || speaksFirst === 'assistant' || speaksFirst === true) ? 'ai' : 'caller',
+      speaksFirst: (speaksFirst === 'ai' || speaksFirst === 'agent' || speaksFirst === 'assistant' || speaksFirst === true) ? 'agent' : 'caller',
       greetingMessage: fullConfig?.greetingMessage || 'Hello there! How can I help you today?',
       id: agentId,
       phone: fullConfig?.phone || '(440) 693-1068',
@@ -910,7 +910,7 @@ fastify.post('/api/update-speaking-order', async (request, reply) => {
     if (!speakingOrder || !['agent', 'caller', 'ai', 'user'].includes(speakingOrder)) {
       return reply.status(400).send({ error: 'Invalid speaking order. Must be "agent" or "caller"' });
     }
-    const speaksFirstValue = (speakingOrder === 'agent' || speakingOrder === 'ai') ? 'ai' : 'caller';
+    const speaksFirstValue = (speakingOrder === 'agent' || speakingOrder === 'ai') ? 'agent' : 'caller';
     const updatedAgent = updateUserAgent(userId, agentId, { speaksFirst: speaksFirstValue });
     console.log(`✅ Speaking order updated: User ${userId}, Agent ${agentId}, SpeaksFirst: ${speaksFirstValue}`);
     reply.send({
@@ -1240,7 +1240,7 @@ fastify.register(async (fastify) => {
         if (!error && data) {
           const speaksFirstNormalized =
             (data.speaking_order === 'agent' || data.speaking_order === 'ai')
-              ? 'ai' : 'caller';
+              ? 'agent' : 'caller';
 
           agentConfig = {
             ...agentConfig,
@@ -1272,6 +1272,7 @@ fastify.register(async (fastify) => {
     let streamSid = null;
     let callId = null;
     let twilioCallSid = null;
+    let greetingPending = false;
     let latestMediaTimestamp = 0;
     let lastAssistantItem = null;
     let markQueue = [];
@@ -1488,9 +1489,14 @@ fastify.register(async (fastify) => {
           console.log('Full response object:', JSON.stringify(response.response, null, 2));
           console.log('====================================');
         }
-        if (response.type === 'session.updated' && agentConfig.speaksFirst === 'ai') {
-          console.log('✅ session.updated received - triggering initial greeting');
-          sendInitialConversationItem();
+        if (response.type === 'session.updated' && agentConfig.speaksFirst === 'agent') {
+          console.log('✅ session.updated received - greeting pending until streamSid available');
+          if (streamSid) {
+            console.log('✅ streamSid already available - sending greeting now');
+            sendInitialConversationItem();
+          } else {
+            greetingPending = true;
+          }
         }
         if (response.type === 'response.function_call_arguments.done') {
           console.log('🔔 Function call detected:', response);
@@ -1922,6 +1928,12 @@ fastify.register(async (fastify) => {
             createCallRecord(callId, streamSid, agentId, callerNumber, userId);
             responseStartTimestampTwilio = null;
             latestMediaTimestamp = 0;
+            // Fire greeting now that streamSid is available
+            if (greetingPending) {
+              console.log('✅ streamSid now available - firing pending greeting');
+              greetingPending = false;
+              setTimeout(sendInitialConversationItem, 100);
+            }
             break;
           case 'mark':
             if (markQueue.length > 0) {
